@@ -1,0 +1,51 @@
+# Python 캐시 및 가상 환경
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# 테스트 및 정적 분석 결과
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# 패키징 및 빌드 산출물
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# 로컬 환경 설정 (예제 설정은 추적)
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# 실행 중 생성되는 파일 (빈 폴더는 유지)
+/cache/*
+!/cache/.gitkeep
+/logs/*
+!/logs/.gitkeep
+/output/*
+!/output/.gitkeep
+/temp/*
+!/temp/.gitkeep
+*.log
+*.tmp
+*.pptcomposer
+
+# Office 잠금 파일 및 운영체제 파일
+~$*
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# 로컬 IDE 설정
+.idea/
+*.swp
+*.swo
