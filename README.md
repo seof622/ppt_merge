@@ -10,7 +10,7 @@
 - pywin32 (`pythoncom` 포함)
 - 설치된 Microsoft PowerPoint
 
-현재는 폴더와 모듈 골격만 구성되어 있으며 앱 실행과 슬라이드 결합 기능은 아직 구현하지 않았습니다.
+현재는 앱 모듈 골격과 PowerPoint COM 결합 PoC가 준비되어 있습니다. 데스크톱 UI는 아직 구현하지 않았습니다. 기본 테스트 자료, 실행 방법 및 직접 확인할 항목은 [PoC 검증 안내](docs/poc_validation.md)를 참고하세요.
 
 ## 폴더 구조
 
@@ -47,7 +47,7 @@ ppt_merge/
 │       ├── logger.py
 │       └── file_utils.py
 ├── scripts/
-│   └── poc/                    # 첫 단계: 슬라이드 보존 검증
+│   └── poc/                    # 테스트 PPT 생성, 결합 방식 비교 및 보존 검증
 ├── tests/
 │   ├── unit/                   # COM 없이 검증하는 모델 및 유틸리티 테스트
 │   ├── integration/            # PowerPoint 설치가 필요한 통합 테스트
@@ -69,3 +69,13 @@ ppt_merge/
 4. `src/workers/`를 통해 서비스 호출, 진행률, 취소 및 COM 정리를 연결합니다.
 
 UI에서 COM 객체를 직접 조작하지 않습니다. 작업 스레드는 `pythoncom.CoInitialize()` / `CoUninitialize()`를 호출하고, 스레드 간에는 일반 Python 데이터만 전달합니다. 각 모듈의 docstring은 향후 구현할 책임을 설명합니다.
+
+## PoC 실행
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-poc.txt
+.\.venv\Scripts\python.exe scripts/poc/run_poc.py
+```
+
+PowerPoint를 닫은 상태에서 실행합니다. 기본 PPT는 `tests/fixtures/basic/`에 있습니다. 새 자료를 만들려면 `create_fixtures.py --directory <새 폴더> --image <이미지 경로>`를 사용합니다. 결과는 매 실행마다 별도의 `output/poc_<날짜_시간>/`에 저장되며 기존 출력 파일을 덮어쓰지 않습니다.
