@@ -10,7 +10,21 @@
 - pywin32 (`pythoncom` 포함)
 - 설치된 Microsoft PowerPoint
 
-현재는 PowerPoint COM 결합 PoC와 썸네일 생성·캐시 서비스가 구현되어 있습니다. 데스크톱 UI는 아직 구현하지 않았습니다. 기본·고급 PPT 보존 검증을 통과했고, 썸네일 캐시는 단위 테스트 15개와 실제 PowerPoint 통합 테스트 8개를 통과했습니다. 실행 방법과 검증 결과는 [기본 검증 안내](docs/poc_validation.md), [고급 검증 안내](docs/advanced_validation.md), [썸네일 검증 안내](docs/thumbnail_validation.md)를 참고하세요.
+현재는 PPT 파일 목록과 슬라이드 썸네일을 보여 주는 기본 PySide6 UI, 썸네일 캐시 서비스 및 PowerPoint COM 결합 PoC가 구현되어 있습니다. UI의 출력 순서 편집·PPT 생성 연결은 다음 단계입니다. 기본·고급 PPT 보존 검증, UI·캐시 단위 테스트 24개와 실제 Office UI 통합 테스트 2개를 통과했습니다. 실행 방법과 검증 결과는 [기본 검증 안내](docs/poc_validation.md), [고급 검증 안내](docs/advanced_validation.md), [썸네일 검증 안내](docs/thumbnail_validation.md), [UI 사용·검증 안내](docs/ui_validation.md)를 참고하세요.
+
+## 앱 실행
+
+이 작업 환경에서는 `run_app.bat`을 탐색기에서 더블클릭하면 됩니다. PPT 추가 버튼 또는 파일 끌어 놓기로 PPTX·PPTM 파일을 추가합니다. 소스를 선택하면 슬라이드 번호·제목·썸네일이 표시되고 Ctrl·Shift로 여러 슬라이드를 선택할 수 있습니다. 파일 제거·전체 비우기·다시 읽기·로딩 취소를 지원합니다.
+
+새 환경에서는 의존성을 설치하고 실행합니다.
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m src.main
+```
+
+처음 생성해야 하는 자료는 PowerPoint를 닫은 상태에서 읽습니다. 기존 캐시가 있으면 PowerPoint가 실행 중이어도 미리보기를 사용할 수 있습니다. 작업은 QThread에서 순서대로 처리하며, 창을 닫으면 취소 요청 후 COM·스레드 정리를 마친 뒤 종료합니다. 로그는 `logs/app.log`이고 시작 단계 오류는 `logs/launcher.log`에서 확인합니다.
 
 ## 폴더 구조
 
@@ -100,7 +114,7 @@ PowerPoint를 닫은 상태에서 실행합니다. 기본 PPT는 `tests/fixtures
 
 같은 파일은 PowerPoint 실행 없이 캐시를 재사용합니다. 원본 내용·수정 시각·경로 또는 썸네일 너비가 달라지면 새 캐시를 만들고, 누락·손상된 이미지가 있으면 해당 이미지만 복구합니다. 실행 보고서와 첫 36장 이내의 정적 확인 이미지는 매번 새 `output/thumbnails_<임의값>/`에 저장합니다. 로그는 `logs/app.log`입니다.
 
-앱 서비스는 `src/ppt/thumbnail_service.py`, COM 세션 관리는 `src/ppt/presentation_manager.py`에 있습니다. CLI는 워커 스레드에서 서비스를 실행하며 결과에는 일반 dataclass 데이터만 담습니다. PySide6 화면·QThread 연결은 다음 단계입니다.
+앱 서비스는 `src/ppt/thumbnail_service.py`, COM 세션 관리는 `src/ppt/presentation_manager.py`에 있습니다. CLI와 UI는 워커에서 서비스를 실행하며 결과에는 일반 dataclass 데이터만 담습니다. UI의 QThread 연결은 `src/workers/ppt_worker.py`에 있습니다.
 
 ```powershell
 # PowerPoint 설치 없이 캐시 로직 검증
