@@ -2,13 +2,14 @@
 
 from collections import OrderedDict
 
-from PySide6.QtCore import QAbstractListModel, QModelIndex, QSize, Qt
+from PySide6.QtCore import QAbstractListModel, QModelIndex, QSize, Qt, Signal
 from PySide6.QtGui import QIcon, QPixmap
-from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel, QListView,
+from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel, QListView, QMenu, QPushButton,
                                QSizePolicy, QStackedWidget, QVBoxLayout, QWidget)
 
 from src.models.presentation_model import PresentationInfo
 from src.models.slide_model import SlideItem
+from src.ui.slide_mime import SLIDE_MIME, make_slide_mime
 
 
 class ElidedLabel(QLabel):
@@ -36,8 +37,10 @@ class ElidedLabel(QLabel):
 class SlideListModel(QAbstractListModel):
     """화면에서 요청하는 이미지에만 QIcon을 만들고 최대 128개를 유지한다."""
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, drag_token: str = "") -> None:
         super().__init__(parent)
+        self.drag_token = drag_token
+        self.card_size = QSize(276, 210)
         self.slides: tuple[SlideItem, ...] = ()
         self._icons: OrderedDict[int, QIcon] = OrderedDict()
 
@@ -50,6 +53,20 @@ class SlideListModel(QAbstractListModel):
     def rowCount(self, parent=QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self.slides)
 
+    def flags(self, index):
+        flags = super().flags(index)
+        return flags | Qt.ItemFlag.ItemIsDragEnabled if index.isValid() else flags
+
+    def mimeTypes(self):
+        return [SLIDE_MIME]
+
+    def mimeData(self, indexes):
+        rows = sorted({index.row() for index in indexes if index.isValid()})
+        return make_slide_mime(self.drag_token, tuple(self.slides[row] for row in rows))
+
+    def supportedDragActions(self):
+        return Qt.DropAction.CopyAction
+
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid() or not 0 <= index.row() < len(self.slides):
             return None
@@ -59,7 +76,7 @@ class SlideListModel(QAbstractListModel):
         if role == Qt.ItemDataRole.ToolTipRole:
             return f"{slide.title or '슬라이드'}\n{slide.source_file}\n슬라이드 {slide.slide_index}"
         if role == Qt.ItemDataRole.SizeHintRole:
-            return QSize(276, 210)
+            return self.card_size
         if role == Qt.ItemDataRole.UserRole:
             return slide
         if role == Qt.ItemDataRole.DecorationRole:
@@ -78,7 +95,9 @@ class SlideListModel(QAbstractListModel):
 
 
 class SlideGrid(QWidget):
-    def __init__(self, parent=None) -> None:
+    add_requested = Signal(object)
+
+    def __init__(self, parent=None, drag_token: str = "") -> None:
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 18, 16, 16)
@@ -90,9 +109,13 @@ class SlideGrid(QWidget):
         self.count.setObjectName("mutedText")
         header.addWidget(self.heading, 1)
         header.addWidget(self.count)
+        self.add_button = QPushButton("선택 슬라이드 담기")
+        self.add_button.clicked.connect(self.add_selected)
+        header.addWidget(self.add_button)
         layout.addLayout(header)
-        self.hint = QLabel("Ctrl·Shift로 여러 슬라이드를 선택할 수 있습니다.")
+        self.hint = QLabel("Ctrl·Shift 선택 · 더블클릭 또는 아래 출력 목록에 끌어 놓아 담기")
         self.hint.setObjectName("mutedText")
+        self.hint.setWordWrap(True)
         layout.addWidget(self.hint)
         self.stack = QStackedWidget()
         self.empty = QLabel()
@@ -102,7 +125,7 @@ class SlideGrid(QWidget):
         self.stack.addWidget(self.empty)
         self.view = QListView()
         self.view.setObjectName("slideView")
-        self.model = SlideListModel(self.view)
+        self.model = SlideListModel(self.view, drag_token)
         self.view.setModel(self.model)
         self.view.setViewMode(QListView.ViewMode.IconMode)
         self.view.setResizeMode(QListView.ResizeMode.Adjust)
@@ -115,6 +138,12 @@ class SlideGrid(QWidget):
         self.view.setUniformItemSizes(True)
         self.view.setLayoutMode(QListView.LayoutMode.Batched)
         self.view.setBatchSize(40)
+        self.view.setDragEnabled(True)
+        self.view.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
+        self.view.setDefaultDropAction(Qt.DropAction.CopyAction)
+        self.view.doubleClicked.connect(self._double_clicked)
+        self.view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.view.customContextMenuRequested.connect(self._context_menu)
         self.view.selectionModel().selectionChanged.connect(self._selection_changed)
         self.stack.addWidget(self.view)
         layout.addWidget(self.stack, 1)
@@ -125,9 +154,22 @@ class SlideGrid(QWidget):
         self.heading.setText(heading)
         self.heading.setToolTip(heading)
         self.count.setText("")
+        self.add_button.setEnabled(False)
         self.hint.hide()
         self.empty.setText(message)
         self.stack.setCurrentWidget(self.empty)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if not hasattr(self, "view"):
+            return
+        # 높이가 작은 창에서도 썸네일과 번호를 한 장씩 온전히 볼 수 있게 한다.
+        compact = self.view.height() < 230
+        size = QSize(196, 136) if compact else QSize(276, 210)
+        if self.model.card_size != size:
+            self.model.card_size = size
+            self.view.setIconSize(QSize(160, 90) if compact else QSize(248, 144))
+            self.view.doItemsLayout()
 
     def show_presentation(self, info: PresentationInfo) -> None:
         self.model.set_slides(info.slides)
@@ -144,6 +186,26 @@ class SlideGrid(QWidget):
     def _selection_changed(self, *args) -> None:
         selected = len(self.view.selectionModel().selectedIndexes())
         self.count.setText(f"{self.model.rowCount()}장 · {selected}장 선택")
+        self.add_button.setEnabled(selected > 0)
+
+    def add_selected(self) -> None:
+        slides = self.selected_slides()
+        if slides:
+            self.add_requested.emit(slides)
+
+    def _double_clicked(self, index) -> None:
+        if index.isValid():
+            self.add_requested.emit((self.model.slides[index.row()],))
+
+    def _context_menu(self, position) -> None:
+        index = self.view.indexAt(position)
+        if not index.isValid():
+            return
+        if not self.view.selectionModel().isSelected(index):
+            self.view.setCurrentIndex(index)
+        menu = QMenu(self)
+        menu.addAction("선택 슬라이드 담기", self.add_selected)
+        menu.exec(self.view.viewport().mapToGlobal(position))
 
     def selected_slides(self) -> tuple[SlideItem, ...]:
         return tuple(self.model.slides[index.row()] for index in

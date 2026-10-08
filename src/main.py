@@ -31,12 +31,16 @@ QListWidget#sourceList::item:selected { background: #dbeafe; color: #1e40af; }
 QListView#slideView { border: none; background: #f8fafc; outline: none; }
 QListView#slideView::item { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; }
 QListView#slideView::item:selected { background: #eff6ff; border: 2px solid #3b82f6; color: #1e40af; }
+QListView#outputView { border: 1px solid #cbd5e1; border-radius: 6px; background: #f8fafc; outline: none; }
+QListView#outputView::item { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; padding: 6px; }
+QListView#outputView::item:selected { background: #eff6ff; border: 2px solid #3b82f6; color: #1e40af; }
 QStatusBar { background: #ffffff; border-top: 1px solid #e2e8f0; padding: 6px 14px; }
 QStatusBar::item { border: none; }
 QProgressBar { border: 1px solid #cbd5e1; border-radius: 4px; height: 18px; text-align: center; }
 QProgressBar::chunk { background: #3b82f6; }
 QPushButton { background: #ffffff; border: 1px solid #cbd5e1; border-radius: 5px; padding: 5px 12px; }
 QPushButton:hover { background: #eff6ff; }
+QPushButton:disabled { color: #94a3b8; border-color: #e2e8f0; }
 """
 
 
@@ -52,7 +56,7 @@ def configure_application(app: QApplication) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="PPT 파일의 슬라이드 썸네일을 확인합니다.")
+    parser = argparse.ArgumentParser(description="PPT 슬라이드를 미리 보고 출력 순서를 편집합니다.")
     parser.add_argument("sources", nargs="*", type=Path)
     args = parser.parse_args()
     configure_logging(ROOT / "logs")

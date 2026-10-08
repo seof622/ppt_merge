@@ -10,11 +10,13 @@
 - pywin32 (`pythoncom` 포함)
 - 설치된 Microsoft PowerPoint
 
-현재는 PPT 파일 목록과 슬라이드 썸네일을 보여 주는 기본 PySide6 UI, 썸네일 캐시 서비스 및 PowerPoint COM 결합 PoC가 구현되어 있습니다. UI의 출력 순서 편집·PPT 생성 연결은 다음 단계입니다. 기본·고급 PPT 보존 검증, UI·캐시 단위 테스트 24개와 실제 Office UI 통합 테스트 2개를 통과했습니다. 실행 방법과 검증 결과는 [기본 검증 안내](docs/poc_validation.md), [고급 검증 안내](docs/advanced_validation.md), [썸네일 검증 안내](docs/thumbnail_validation.md), [UI 사용·검증 안내](docs/ui_validation.md)를 참고하세요.
+현재는 PPT 파일 목록·썸네일 보기·출력 슬라이드 순서 편집 UI, 썸네일 캐시 서비스 및 PowerPoint COM 결합 PoC가 구현되어 있습니다. UI에서 새 PPT를 생성하는 연결은 다음 단계입니다. 출력 편집 구현 후 단위 테스트 42개와 실제 PPT 캐시 기반 UI 통합 테스트 1개를 통과했습니다. 기존 단계에서 기본·고급 PPT 보존과 실제 Office UI 통합 테스트 2개도 검증했습니다. 실행 방법과 검증 결과는 [기본 검증 안내](docs/poc_validation.md), [고급 검증 안내](docs/advanced_validation.md), [썸네일 검증 안내](docs/thumbnail_validation.md), [기본 UI 검증 기록](docs/ui_validation.md), [출력 순서 편집 안내](docs/output_composer_validation.md)를 참고하세요.
 
 ## 앱 실행
 
-이 작업 환경에서는 `run_app.bat`을 탐색기에서 더블클릭하면 됩니다. PPT 추가 버튼 또는 파일 끌어 놓기로 PPTX·PPTM 파일을 추가합니다. 소스를 선택하면 슬라이드 번호·제목·썸네일이 표시되고 Ctrl·Shift로 여러 슬라이드를 선택할 수 있습니다. 파일 제거·전체 비우기·다시 읽기·로딩 취소를 지원합니다.
+이 작업 환경에서는 `run_app.bat`을 탐색기에서 더블클릭하면 됩니다. PPT 추가 버튼 또는 파일 끌어 놓기로 PPTX·PPTM 파일을 추가합니다. 소스를 선택하면 슬라이드 번호·제목·썸네일이 표시되고 Ctrl·Shift로 여러 슬라이드를 선택할 수 있습니다. 파일 제거·파일 목록 비우기·다시 읽기·로딩 취소를 지원합니다.
+
+‘선택 슬라이드 담기’, 더블클릭, 우클릭 메뉴 또는 출력 영역에 드래그해서 슬라이드를 담습니다. 출력 목록은 왼쪽부터 최종 순서이며 중복을 허용합니다. Ctrl·Shift 선택, 드래그 순서 변경, Delete 삭제, 복제, 앞으로·뒤로·맨 앞으로·맨 뒤로 이동, 출력 비우기를 지원합니다. 파일 목록을 비워도 출력 목록은 유지됩니다. 현재 편집 내용은 앱 종료 시 초기화되며 프로젝트 저장과 새 PPT 생성은 후속 단계입니다.
 
 새 환경에서는 의존성을 설치하고 실행합니다.
 
@@ -41,6 +43,7 @@ ppt_merge/
 │   │   ├── main_window.py
 │   │   ├── source_panel.py
 │   │   ├── slide_grid.py
+│   │   ├── slide_mime.py         # 같은 창의 슬라이드 드래그 데이터
 │   │   ├── output_panel.py
 │   │   └── slide_item_widget.py
 │   ├── ppt/                    # PowerPoint COM 서비스

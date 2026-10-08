@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 import os
 from pathlib import Path
+from uuid import uuid4
 
 from PySide6.QtCore import QThread, QTimer, Qt, Slot
 from PySide6.QtGui import QAction, QKeySequence
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (QFileDialog, QLabel, QMainWindow, QProgressBar, Q
 from src.ppt.thumbnail_service import ThumbnailProgress, ThumbnailResult, ThumbnailService
 from src.ui.slide_grid import ElidedLabel, SlideGrid
 from src.ui.source_panel import SourcePanel
+from src.ui.output_panel import OutputPanel
 from src.workers.ppt_worker import PptWorker
 
 
@@ -30,7 +32,7 @@ class MainWindow(QMainWindow):
     def __init__(self, cache_root: Path,
                  service_factory: Callable[[], ThumbnailService] | None = None) -> None:
         super().__init__()
-        self.setWindowTitle("PPT Merge · 슬라이드 미리보기")
+        self.setWindowTitle("PPT Merge · 슬라이드 순서 편집")
         self.resize(1600, 900)
         self.setMinimumSize(1000, 640)
         self.setAcceptDrops(True)
@@ -54,7 +56,7 @@ class MainWindow(QMainWindow):
         self.remove_action = QAction("선택 파일 제거", self)
         self.remove_action.triggered.connect(self.remove_selected)
         toolbar.addAction(self.remove_action)
-        self.clear_action = QAction("전체 비우기", self)
+        self.clear_action = QAction("파일 목록 비우기", self)
         self.clear_action.triggered.connect(self.clear_sources)
         toolbar.addAction(self.clear_action)
         toolbar.addSeparator()
@@ -76,13 +78,22 @@ class MainWindow(QMainWindow):
         self.source_panel = SourcePanel()
         self.source_panel.setMinimumWidth(240)
         self.source_panel.setMaximumWidth(420)
-        self.slide_grid = SlideGrid()
+        drag_token = uuid4().hex
+        self.slide_grid = SlideGrid(drag_token=drag_token)
+        self.output_panel = OutputPanel(drag_token=drag_token)
+        self.slide_grid.add_requested.connect(self.output_panel.add_slides)
         splitter.addWidget(self.source_panel)
         splitter.addWidget(self.slide_grid)
         splitter.setSizes([290, 1310])
         splitter.setCollapsible(0, False)
         splitter.setCollapsible(1, False)
-        layout.addWidget(splitter, 1)
+        composer = QSplitter(Qt.Orientation.Vertical)
+        composer.addWidget(splitter)
+        composer.addWidget(self.output_panel)
+        composer.setSizes([590, 310])
+        composer.setCollapsible(0, False)
+        composer.setCollapsible(1, False)
+        layout.addWidget(composer, 1)
         self.setCentralWidget(container)
         self.source_panel.current_source_changed.connect(self._show_source)
         self.source_panel.selection_changed.connect(self._update_actions)
