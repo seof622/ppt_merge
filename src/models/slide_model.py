@@ -1,1 +1,13 @@
-"""소스 경로, 슬라이드 번호, ID, 썸네일 및 제목 데이터를 정의한다."""
+"""스레드 사이에서 전달할 슬라이드 데이터. COM 참조를 담지 않는다."""
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class SlideItem:
+    source_file: str
+    source_file_name: str
+    slide_index: int
+    slide_id: int
+    thumbnail_path: str | None = None
+    title: str | None = None

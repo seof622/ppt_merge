@@ -10,7 +10,7 @@
 - pywin32 (`pythoncom` 포함)
 - 설치된 Microsoft PowerPoint
 
-현재는 앱 모듈 골격과 PowerPoint COM 결합 PoC가 준비되어 있습니다. 데스크톱 UI는 아직 구현하지 않았습니다. 기본 자료와 SVG·SmartArt·미디어 등 고급 자료의 자동·수동 검증은 통과했습니다. 실행 방법과 직접 확인할 항목은 [기본 검증 안내](docs/poc_validation.md), [고급 검증 안내](docs/advanced_validation.md)를 참고하세요.
+현재는 PowerPoint COM 결합 PoC와 썸네일 생성·캐시 서비스가 구현되어 있습니다. 데스크톱 UI는 아직 구현하지 않았습니다. 기본·고급 PPT 보존 검증을 통과했고, 썸네일 캐시는 단위 테스트 15개와 실제 PowerPoint 통합 테스트 8개를 통과했습니다. 실행 방법과 검증 결과는 [기본 검증 안내](docs/poc_validation.md), [고급 검증 안내](docs/advanced_validation.md), [썸네일 검증 안내](docs/thumbnail_validation.md)를 참고하세요.
 
 ## 폴더 구조
 
@@ -68,7 +68,7 @@ ppt_merge/
 3. 보존 검증이 통과하면 `src/ui/`에서 파일 목록·슬라이드 그리드·출력 순서 화면을 구현합니다.
 4. `src/workers/`를 통해 서비스 호출, 진행률, 취소 및 COM 정리를 연결합니다.
 
-UI에서 COM 객체를 직접 조작하지 않습니다. 작업 스레드는 `pythoncom.CoInitialize()` / `CoUninitialize()`를 호출하고, 스레드 간에는 일반 Python 데이터만 전달합니다. 각 모듈의 docstring은 향후 구현할 책임을 설명합니다.
+UI에서 COM 객체를 직접 조작하지 않습니다. 작업 스레드는 `pythoncom.CoInitialize()` / `CoUninitialize()`를 호출하고, 스레드 간에는 일반 Python 데이터만 전달합니다. 아직 구현하지 않은 모듈의 docstring은 향후 구현할 책임을 설명합니다.
 
 ## PoC 실행
 
@@ -87,3 +87,26 @@ PowerPoint를 닫은 상태에서 실행합니다. 기본 PPT는 `tests/fixtures
 ```
 
 고급 자료는 `tests/fixtures/advanced/`에 있습니다. 새 자료를 만들려면 PowerPoint와 Excel을 닫고 `create_advanced_fixtures.py --directory <새 폴더>`를 실행합니다. 기존 자료를 덮어쓰지 않습니다. 외부 Excel 연결에 절대 경로가 저장되므로 다른 컴퓨터에서는 자료를 새 폴더에 생성한 뒤 `run_advanced_poc.py --fixtures <새 폴더>`로 검증합니다. `.pptm` 자료는 실제 VBA 매크로가 없는 형식 검증용입니다.
+
+## 썸네일 생성·캐시
+
+기존 `requirements-poc.txt`의 의존성으로 실행할 수 있습니다. 최초 생성 시 PowerPoint를 닫고 실행합니다.
+
+```powershell
+.\.venv\Scripts\python.exe scripts/export_thumbnails.py tests/fixtures/basic/A.pptx tests/fixtures/basic/B.pptx
+```
+
+썸네일은 `cache/<캐시 키>/slide_<번호>.png`, 슬라이드 제목·ID와 캐시 정보는 같은 폴더의 `manifest.json`에 저장합니다. 기본 너비는 480px이며 원본 비율을 유지합니다. `--width 640` 등으로 바꿀 수 있습니다.
+
+같은 파일은 PowerPoint 실행 없이 캐시를 재사용합니다. 원본 내용·수정 시각·경로 또는 썸네일 너비가 달라지면 새 캐시를 만들고, 누락·손상된 이미지가 있으면 해당 이미지만 복구합니다. 실행 보고서와 첫 36장 이내의 정적 확인 이미지는 매번 새 `output/thumbnails_<임의값>/`에 저장합니다. 로그는 `logs/app.log`입니다.
+
+앱 서비스는 `src/ppt/thumbnail_service.py`, COM 세션 관리는 `src/ppt/presentation_manager.py`에 있습니다. CLI는 워커 스레드에서 서비스를 실행하며 결과에는 일반 dataclass 데이터만 담습니다. PySide6 화면·QThread 연결은 다음 단계입니다.
+
+```powershell
+# PowerPoint 설치 없이 캐시 로직 검증
+.\.venv\Scripts\python.exe -m unittest discover -s tests/unit -v
+
+# PowerPoint를 닫은 상태에서 실제 Office 통합 검증
+$env:PPT_MERGE_COM_TESTS = '1'
+.\.venv\Scripts\python.exe -m unittest discover -s tests/integration -p test_thumbnail_com.py -v
+```
