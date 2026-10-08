@@ -10,7 +10,7 @@
 - pywin32 (`pythoncom` 포함)
 - 설치된 Microsoft PowerPoint
 
-현재는 앱 모듈 골격과 PowerPoint COM 결합 PoC가 준비되어 있습니다. 데스크톱 UI는 아직 구현하지 않았습니다. 기본 테스트 자료, 실행 방법 및 직접 확인할 항목은 [PoC 검증 안내](docs/poc_validation.md)를 참고하세요.
+현재는 앱 모듈 골격과 PowerPoint COM 결합 PoC가 준비되어 있습니다. 데스크톱 UI는 아직 구현하지 않았습니다. 기본 자료와 SVG·SmartArt·미디어 등 고급 자료의 자동·수동 검증은 통과했습니다. 실행 방법과 직접 확인할 항목은 [기본 검증 안내](docs/poc_validation.md), [고급 검증 안내](docs/advanced_validation.md)를 참고하세요.
 
 ## 폴더 구조
 
@@ -79,3 +79,11 @@ python -m venv .venv
 ```
 
 PowerPoint를 닫은 상태에서 실행합니다. 기본 PPT는 `tests/fixtures/basic/`에 있습니다. 새 자료를 만들려면 `create_fixtures.py --directory <새 폴더> --image <이미지 경로>`를 사용합니다. 결과는 매 실행마다 별도의 `output/poc_<날짜_시간>/`에 저장되며 기존 출력 파일을 덮어쓰지 않습니다.
+
+고급 자료의 검증은 다음과 같이 실행합니다.
+
+```powershell
+.\.venv\Scripts\python.exe scripts/poc/run_advanced_poc.py
+```
+
+고급 자료는 `tests/fixtures/advanced/`에 있습니다. 새 자료를 만들려면 PowerPoint와 Excel을 닫고 `create_advanced_fixtures.py --directory <새 폴더>`를 실행합니다. 기존 자료를 덮어쓰지 않습니다. 외부 Excel 연결에 절대 경로가 저장되므로 다른 컴퓨터에서는 자료를 새 폴더에 생성한 뒤 `run_advanced_poc.py --fixtures <새 폴더>`로 검증합니다. `.pptm` 자료는 실제 VBA 매크로가 없는 형식 검증용입니다.

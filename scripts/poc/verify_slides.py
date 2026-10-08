@@ -44,6 +44,18 @@ def shape_signature(shape: Any) -> dict[str, Any]:
                            for row in range(1, table.Rows.Count + 1)]
     if shape.HasChart:
         result["chart_type"] = int(shape.Chart.ChartType)
+    if shape.HasSmartArt:
+        result["smartart"] = {
+            "layout": shape.SmartArt.Layout.Id,
+            "nodes": [(node.TextFrame2.TextRange.Text, int(node.Level))
+                      for node in shape.SmartArt.AllNodes],
+        }
+    if shape.Type == 16:
+        result["media"] = {"type": int(shape.MediaType), "length_ms": int(shape.MediaFormat.Length)}
+    if shape.Type in (7, 10):
+        result["ole_progid"] = shape.OLEFormat.ProgID
+    if shape.Type == 10:
+        result["linked_source"] = shape.LinkFormat.SourceFullName
     return result
 
 
@@ -115,3 +127,45 @@ def compare_images(source: Path, output: Path) -> dict[str, Any]:
         difference = ImageChops.difference(original.convert("RGB"), generated.convert("RGB"))
         rms = sum(ImageStat.Stat(difference).rms) / 3
         return {"equal": difference.getbbox() is None, "mean_channel_rms": round(rms, 6)}
+
+
+def advanced_package_signatures(path: Path) -> list[dict[str, Any]]:
+    """미디어·SVG·SmartArt·OLE·외부 링크·모션 경로의 원본 자료를 검사한다."""
+    signatures = package_signatures(path)
+    with ZipFile(path) as archive:
+        pres = ET.fromstring(archive.read("ppt/presentation.xml"))
+        targets = {r.attrib["Id"]: r.attrib["Target"]
+                   for r in ET.fromstring(archive.read("ppt/_rels/presentation.xml.rels"))}
+        slide_paths = [posixpath.normpath(posixpath.join("ppt", targets[s.attrib[f"{{{NS['r']}}}id"]]))
+                       for s in pres.findall("p:sldIdLst/p:sldId", NS)]
+        for index, slide_path in enumerate(slide_paths):
+            directory, filename = posixpath.split(slide_path)
+            relationships = ET.fromstring(archive.read(f"{directory}/_rels/{filename}.rels"))
+            assets, external, internal = [], [], []
+            for rel in relationships:
+                kind = rel.attrib["Type"].rsplit("/", 1)[-1]
+                target = rel.attrib["Target"]
+                if rel.attrib.get("TargetMode") == "External":
+                    external.append((kind, target))
+                    continue
+                part = posixpath.normpath(posixpath.join(directory, target))
+                if kind in ("audio", "video", "media", "oleObject", "package", "diagramData",
+                            "diagramLayout", "diagramColors", "diagramQuickStyle"):
+                    data = archive.read(part)
+                    if kind.startswith("diagram"):
+                        root = ET.fromstring(data)
+                        # PowerPoint가 갱신하는 렌더 캐시 확장은 제외하고 편집용 데이터를 비교한다.
+                        for parent in root.iter():
+                            for child in list(parent):
+                                if child.tag.rsplit("}", 1)[-1] == "extLst":
+                                    parent.remove(child)
+                        data = ET.canonicalize(ET.tostring(root, encoding="unicode")).encode("utf-8")
+                    assets.append((kind, hashlib.sha256(data).hexdigest()))
+                elif kind == "slide":
+                    internal.append(slide_paths.index(part) + 1 if part in slide_paths else None)
+            slide = ET.fromstring(archive.read(slide_path))
+            motion_paths = [node.attrib.get("path") for node in slide.iter()
+                            if node.tag.rsplit("}", 1)[-1] == "animMotion"]
+            signatures[index].update({"advanced_assets": sorted(assets), "external_links": sorted(external),
+                                      "internal_link_target_indices": internal, "motion_paths": motion_paths})
+    return signatures

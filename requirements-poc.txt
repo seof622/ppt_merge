@@ -1,3 +1,5 @@
 # COM 검증에 필요한 최소 의존성. UI 의존성은 UI 단계에서 추가한다.
 pywin32==312; sys_platform == "win32"
 Pillow==12.3.0
+# 고급 테스트용 짧은 영상을 생성하는 FFmpeg 런타임
+imageio-ffmpeg==0.6.0

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from com_session import ROOT, PowerPointSession, configure_logging
+from internal_links import read_internal_links, reconnect_internal_links
 from verify_slides import compare_images, package_signatures, slide_signature
 
 LOGGER = logging.getLogger("ppt_merge.poc")
@@ -22,7 +23,8 @@ class GenerationCancelled(Exception):
 
 def merge(session: PowerPointSession, sources: dict[str, Any],
           selection: list[tuple[str, int]], method: str, path: Path,
-          cancel_after: int | None = None, fail_after: int | None = None) -> None:
+          cancel_after: int | None = None, fail_after: int | None = None,
+          remap_links: bool = False) -> None:
     if path.exists():
         raise FileExistsError(f"기존 결과를 덮어쓰지 않습니다: {path}")
     sizes = {(round(float(sources[key].PageSetup.SlideWidth), 3),
@@ -37,6 +39,8 @@ def merge(session: PowerPointSession, sources: dict[str, Any],
         session.close_presentation(destination)
         raise FileExistsError(f"기존 임시 파일을 덮어쓰지 않습니다: {temporary}")
     saved = False
+    slide_map: dict[tuple[str, int], list[int]] = {}
+    internal_links: list[tuple[int, str, list[tuple[int, int]]]] = []
     try:
         width, height = sizes.pop()
         destination.PageSetup.SlideWidth = width
@@ -47,6 +51,8 @@ def merge(session: PowerPointSession, sources: dict[str, Any],
             if fail_after is not None and completed >= fail_after:
                 raise RuntimeError("정리 검증을 위한 의도적 생성 오류")
             source = sources[key].Slides.Item(number)
+            if remap_links:
+                source_links = read_internal_links(sources[key], source)
             LOGGER.info("슬라이드 복사 method=%s %s #%s %s/%s", method, key, number, completed + 1, len(selection))
             if method == "copy_paste":
                 source.Copy()
@@ -66,7 +72,12 @@ def merge(session: PowerPointSession, sources: dict[str, Any],
                 target.Design = design
                 target.CustomLayout = design.SlideMaster.CustomLayouts.Item(source.CustomLayout.Index)
                 target.FollowMasterBackground = source.FollowMasterBackground
+            if remap_links:
+                slide_map.setdefault((key, int(source.SlideID)), []).append(completed + 1)
+                internal_links.append((completed + 1, key, source_links))
             pasted = source = target = design = None
+        if remap_links:
+            reconnect_internal_links(destination, slide_map, internal_links)
         if destination.Slides.Count != len(selection):
             raise RuntimeError("출력 슬라이드 수가 예상과 다릅니다.")
         destination.SaveAs(str(temporary), 24)
