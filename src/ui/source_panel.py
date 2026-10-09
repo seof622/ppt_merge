@@ -1,8 +1,8 @@
 """메인 화면의 폴더 탐색과 읽은 원본 목록. COM을 호출하지 않는다."""
 from pathlib import Path
-from PySide6.QtCore import QDir, QStandardPaths, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QDir, QEvent, QStandardPaths, QTimer, Qt, Signal, Slot
 from PySide6.QtWidgets import (QAbstractItemView, QFileSystemModel, QFrame, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QStackedWidget, QStyle, QTabWidget, QTreeView, QVBoxLayout)
+    QLineEdit, QListWidget, QListWidgetItem, QStackedWidget, QTabWidget, QTreeView, QVBoxLayout)
 from src.ui.file_browser import FileSearchThread, SourceTreeModel, source_key
 
 class SourcePanel(QFrame):
@@ -16,6 +16,7 @@ class SourcePanel(QFrame):
         super().__init__(parent)
         self.setObjectName("sourcePanel")
         self._items: dict[str, QListWidgetItem] = {}
+        self._result_items: dict[str, QListWidgetItem] = {}
         self._search_threads: list[FileSearchThread] = []
         self._search_token = 0
         self._closing = False
@@ -76,12 +77,12 @@ class SourcePanel(QFrame):
         self.list.currentItemChanged.connect(self._current_changed)
         self.list.itemSelectionChanged.connect(self.selection_changed.emit)
         self.tabs.currentChanged.connect(self._tab_changed)
-        self.tree.selectionModel().currentChanged.connect(self._tree_current_changed)
         self.tree.selectionModel().selectionChanged.connect(lambda selected, deselected: self.selection_changed.emit())
         self.tree.clicked.connect(self._tree_clicked)
+        self.tree.installEventFilter(self)
         self.file_model.directoryLoaded.connect(self._directory_loaded)
-        self.results.currentItemChanged.connect(self._result_changed)
-        self.results.itemClicked.connect(lambda item: self.file_selected.emit(item.data(Qt.ItemDataRole.UserRole)))
+        self.results.itemClicked.connect(self._result_clicked)
+        self.results.installEventFilter(self)
         self.results.itemSelectionChanged.connect(self.selection_changed.emit)
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
@@ -99,7 +100,7 @@ class SourcePanel(QFrame):
         self._cancel_search()
         self.search.clear()
         self.root_path = root
-        self.results.clear()
+        self._clear_search_results()
         self.stack.setCurrentWidget(self.tree)
         self.search_status.hide()
         self.tree.clearSelection()
@@ -114,9 +115,23 @@ class SourcePanel(QFrame):
     def _path(self, index) -> str:
         return self.file_model.filePath(self.tree_model.mapToSource(index)) if index.isValid() else ""
 
-    def _tree_current_changed(self, current, previous) -> None:
-        if self.tabs.currentIndex() == 0 and self.stack.currentWidget() == self.tree:
-            self._tree_clicked(current)
+    def eventFilter(self, watched, event) -> bool:
+        # 포커스 복원·모델 갱신의 자동 선택은 파일 추가로 연결하지 않는다.
+        # 실제 키 입력은 Qt의 선택 처리를 마친 뒤 선택한 파일만 읽는다.
+        navigation = (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_Left, Qt.Key.Key_Right,
+                      Qt.Key.Key_Home, Qt.Key.Key_End, Qt.Key.Key_PageUp, Qt.Key.Key_PageDown,
+                      Qt.Key.Key_Return, Qt.Key.Key_Enter)
+        if (event.type() == QEvent.Type.KeyPress and watched in (self.tree, self.results)
+                and event.key() in navigation):
+            previous = watched.currentIndex()
+            watched.keyPressEvent(event)
+            if watched.currentIndex() != previous or event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                if watched == self.tree:
+                    self._tree_clicked(watched.currentIndex())
+                else:
+                    self._result_clicked(self.results.currentItem())
+            return True
+        return super().eventFilter(watched, event)
 
     def _tree_clicked(self, index) -> None:
         source = self.tree_model.mapToSource(index)
@@ -134,9 +149,9 @@ class SourcePanel(QFrame):
         if self._path(index) == path:
             self.tree.expand(index)
 
-    def _result_changed(self, current, previous) -> None:
-        if current and self.tabs.currentIndex() == 0:
-            self.file_selected.emit(current.data(Qt.ItemDataRole.UserRole))
+    def _result_clicked(self, item) -> None:
+        if item and self.tabs.currentIndex() == 0 and self.stack.currentWidget() == self.results:
+            self.file_selected.emit(item.data(Qt.ItemDataRole.UserRole))
 
     def _current_changed(self, current, previous) -> None:
         if self.tabs.currentIndex() == 1:
@@ -156,12 +171,10 @@ class SourcePanel(QFrame):
 
     def set_state(self, key: str, path: str, status: str, detail: str = "", *, state: str = "queued") -> None:
         self.tree_model.set_state(path, status, detail, state)
+        self._update_search_item(key)
         item = self._items.get(key)
         if item:
-            icons = {"ready": QStyle.StandardPixmap.SP_DialogApplyButton,
-                "loading": QStyle.StandardPixmap.SP_BrowserReload, "failed": QStyle.StandardPixmap.SP_MessageBoxCritical,
-                "cancelled": QStyle.StandardPixmap.SP_DialogCancelButton}
-            item.setIcon(self.style().standardIcon(icons.get(state, QStyle.StandardPixmap.SP_FileIcon)))
+            item.setIcon(self.tree_model.source_icon(path))
             item.setText(Path(path).name + (f"\n{status.split(' · ')[0]}" if state == "ready" else ""))
             item.setData(Qt.ItemDataRole.AccessibleTextRole, f"{Path(path).name} · {status}")
             item.setToolTip(f"{path}\n{status}" + (f"\n{detail}" if detail else ""))
@@ -213,6 +226,7 @@ class SourcePanel(QFrame):
         for key in keys:
             item = self._items.pop(key, None)
             self.tree_model.remove_state(key)
+            self._update_search_item(key)
             if item is not None:
                 self.list.takeItem(self.list.row(item))
         self.tabs.setTabText(1, f"원본 ({len(self._items)})")
@@ -220,6 +234,7 @@ class SourcePanel(QFrame):
     def clear_sources(self) -> None:
         for key in tuple(self._items):
             self.tree_model.remove_state(key)
+            self._update_search_item(key)
         self._items.clear()
         self.list.clear()
         self.tabs.setTabText(1, "원본 (0)")
@@ -230,9 +245,10 @@ class SourcePanel(QFrame):
             thread.requestInterruption()
 
     def _query_changed(self, text: str) -> None:
+        selected = self.current_key() if self.stack.currentWidget() == self.results and not text.strip() else ""
         self._debounce.stop()
         self._cancel_search()
-        self.results.clear()
+        self._clear_search_results()
         if text.strip() and not self._closing:
             self.stack.setCurrentWidget(self.results)
             self.search_status.setText("검색 중…")
@@ -241,6 +257,8 @@ class SourcePanel(QFrame):
         else:
             self.stack.setCurrentWidget(self.tree)
             self.search_status.hide()
+            if selected:
+                self.select_source(selected)
         self.selection_changed.emit()
 
     def _start_search(self) -> None:
@@ -259,11 +277,38 @@ class SourcePanel(QFrame):
         if token != self._search_token or self._closing:
             return
         for path in paths:
-            item = QListWidgetItem(str(Path(path).relative_to(self.root_path)))
+            key = source_key(path)
+            if key in self._result_items:
+                continue
+            item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, path)
-            item.setToolTip(path)
-            item.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
+            self._result_items[key] = item
+            self._update_search_item(key)
             self.results.addItem(item)
+
+    def _clear_search_results(self) -> None:
+        self._result_items.clear()
+        self.results.clear()
+
+    def _update_search_item(self, key: str) -> None:
+        item = self._result_items.get(key)
+        if item is None:
+            return
+        path = item.data(Qt.ItemDataRole.UserRole)
+        label = str(Path(path).relative_to(self.root_path))
+        status = self.tree_model.states.get(key)
+        tooltip = path
+        accessible = label
+        if status:
+            text, detail, state = status
+            tooltip += f"\n{text}" + (f"\n{detail}" if detail else "")
+            accessible += f" · {text}"
+            if state == "ready":
+                label += f" · {text.split(' · ')[0]}"
+        item.setText(label)
+        item.setToolTip(tooltip)
+        item.setData(Qt.ItemDataRole.AccessibleTextRole, accessible)
+        item.setIcon(self.tree_model.source_icon(path))
 
     @Slot(int, object)
     def _search_completed(self, token: int, summary) -> None:

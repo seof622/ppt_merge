@@ -3,10 +3,12 @@
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QSortFilterProxyModel, QThread, Qt, Signal
+from PySide6.QtCore import QFileInfo, QSortFilterProxyModel, QThread, Qt, Signal
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QStyle
 
 from src.utils.file_search import is_presentation, search_presentations
+from src.ui.icons import icon
 
 
 def source_key(path: str | Path) -> str:
@@ -52,14 +54,21 @@ class SourceTreeModel(QSortFilterProxyModel):
             if role == Qt.ItemDataRole.DisplayRole and state == "ready":
                 return f"{Path(path).name} · {text.split(' · ')[0]}"
             if role == Qt.ItemDataRole.DecorationRole:
-                icons = {"ready": QStyle.StandardPixmap.SP_DialogApplyButton,
-                         "loading": QStyle.StandardPixmap.SP_BrowserReload,
-                         "failed": QStyle.StandardPixmap.SP_MessageBoxCritical,
-                         "cancelled": QStyle.StandardPixmap.SP_DialogCancelButton}
-                return QApplication.style().standardIcon(icons.get(state, QStyle.StandardPixmap.SP_FileIcon))
+                return self.source_icon(path)
         if role == Qt.ItemDataRole.ToolTipRole:
             return path
         return super().data(index, role)
+
+    def source_icon(self, path: str) -> QIcon:
+        status = self.states.get(source_key(path))
+        icons = {"ready": QStyle.StandardPixmap.SP_DialogApplyButton,
+                 "loading": QStyle.StandardPixmap.SP_BrowserReload,
+                 "failed": QStyle.StandardPixmap.SP_MessageBoxCritical,
+                 "cancelled": QStyle.StandardPixmap.SP_DialogCancelButton}
+        if status and status[2] in icons:
+            return QApplication.style().standardIcon(icons[status[2]])
+        file_icon = self.sourceModel().iconProvider().icon(QFileInfo(path))
+        return file_icon if not file_icon.isNull() else icon("presentation")
 
     def set_state(self, path: str, status: str, detail: str, state: str) -> None:
         self.states[source_key(path)] = (status, detail, state)

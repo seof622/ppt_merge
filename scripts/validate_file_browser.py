@@ -12,11 +12,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEventLoop, QTimer, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QStyle, QToolButton
 
 from src.main import configure_application
 from src.ppt.thumbnail_service import ThumbnailService
 from src.ui.main_window import MainWindow
+from src.ui.file_browser import source_key
 
 
 def wait_until(predicate, timeout=10):
@@ -53,6 +54,7 @@ def main() -> None:
     configure_application(app)
     window = MainWindow(ROOT / "cache", lambda: ThumbnailService(ROOT / "cache", backend_factory=no_com))
     window.show()
+    app.setActiveWindow(window)
     paths = [ROOT / "tests/fixtures/basic/A.pptx", ROOT / "tests/fixtures/basic/B.pptx"]
     panel = window.source_panel
     panel.set_root(ROOT / "tests/fixtures")
@@ -68,15 +70,36 @@ def main() -> None:
     click(basic_path)
     wait_until(lambda: panel.tree_model.rowCount(index(basic_path)) >= 3)
     assert panel.tree.isExpanded(index(basic_path))
-    click(paths[0])
+    panel.search.setText("A.pptx")
+    wait_until(lambda: not panel._debounce.isActive() and not panel.has_search)
+    assert panel.results.count() == 1
+    search_item = panel.results.item(0)
+    assert not search_item.icon().isNull()
+    QTest.qWait(100)
+    assert window.grab().save(str(directory / "main_search_before.png"))
+    QTest.mouseClick(panel.results.viewport(), Qt.MouseButton.LeftButton,
+                     pos=panel.results.visualItemRect(search_item).center())
     wait_until(lambda: not window.is_loading)
     assert window.slide_grid.model.rowCount() == 4
+    assert "4장" in search_item.text()
+    expected = app.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton)
+    assert search_item.icon().pixmap(24, 24).toImage() == expected.pixmap(24, 24).toImage()
+    QTest.qWait(100)
+    assert window.grab().save(str(directory / "main_search_ready.png"))
+    QTest.mouseClick(panel.search.findChild(QToolButton), Qt.MouseButton.LeftButton)
+    QTest.qWait(150)
+    wait_until(lambda: not window.is_loading)
+    assert set(window._sources) == {source_key(paths[0])}
+    assert panel.current_key() == source_key(paths[0])
+    assert window.grab().save(str(directory / "main_search_cleared.png"))
     click(paths[1])
     wait_until(lambda: not window.is_loading)
     assert all(state.result and state.result.cache_hit for state in window._sources.values())
     first, second = [state.result.presentation for state in window._sources.values()]
     window.output_panel.add_slides((first.slides[1], second.slides[3], first.slides[0], first.slides[1]))
-    report = {"cache_only": True, "output_slides": 4, "captures": []}
+    report = {"cache_only": True, "output_slides": 4, "search_icon_present": True,
+              "search_ready_badge": True, "search_clear_preserves_source": True,
+              "captures": ["main_search_before.png", "main_search_ready.png", "main_search_cleared.png"]}
     for width, height in ((1600, 900), (1000, 640)):
         window.resize(width, height)
         QTest.qWait(100)
@@ -94,6 +117,8 @@ def main() -> None:
     assert window.grab().save(str(directory / "main_search.png"))
     report["search_matches"] = panel.results.count()
     panel.search.clear()
+    QTest.qWait(150)
+    assert set(window._sources) == {source_key(path) for path in paths}
     assert panel.stack.currentWidget() == panel.tree
     window.close()
     wait_until(lambda: not panel.has_search and not window.is_busy)

@@ -10,9 +10,9 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEventLoop, QItemSelectionModel, QTimer, Qt
+from PySide6.QtCore import QEventLoop, QFileInfo, QItemSelectionModel, QTimer, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QToolButton
+from PySide6.QtWidgets import QStyle, QToolButton
 
 from src.ui.file_browser import source_key
 from src.utils.file_search import SearchSummary, search_presentations
@@ -151,6 +151,21 @@ class MainSidebarTests(unittest.TestCase):
         self.click(path)
         wait_until(lambda: not self.window.is_loading)
 
+    def search(self, query, count):
+        self.panel.search.setText(query)
+        wait_until(lambda: not self.panel._debounce.isActive() and not self.panel.has_search)
+        self.assertEqual(self.panel.results.count(), count)
+        return self.panel.results.item(0)
+
+    def assert_status_icon(self, item, status):
+        expected = self.app.style().standardIcon(status).pixmap(24, 24).toImage()
+        self.assertEqual(item.icon().pixmap(24, 24).toImage(), expected)
+
+    def click_result(self, item):
+        self.panel.results.scrollToItem(item)
+        QTest.mouseClick(self.panel.results.viewport(), Qt.MouseButton.LeftButton,
+                         pos=self.panel.results.visualItemRect(item).center())
+
     def test_root_children_include_folders_and_only_supported_files(self):
         model = self.panel.tree_model
         root = self.panel.tree.rootIndex()
@@ -244,13 +259,164 @@ class MainSidebarTests(unittest.TestCase):
         item = self.panel.results.item(0)
         self.assertEqual(Path(item.data(Qt.ItemDataRole.UserRole)), self.deep)
         self.assertIn(self.child.name, item.text())
-        self.panel.results.setCurrentItem(item)
+        self.click_result(item)
         wait_until(lambda: not self.window.is_loading)
+        self.assert_status_icon(item, QStyle.StandardPixmap.SP_DialogApplyButton)
+        self.assertIn("3장", item.text())
+        self.assertIn("3장", item.toolTip())
+        self.assertIn("3장", item.data(Qt.ItemDataRole.AccessibleTextRole))
         self.assertEqual(self.panel.stack.currentWidget(), self.panel.results)
         self.assertEqual(self.window.slide_grid.model.slides[0].source_file, str(self.deep))
         self.panel.search.clear()
         self.assertEqual(self.panel.stack.currentWidget(), self.panel.tree)
         self.assertEqual(self.panel.results.count(), 0)
+        self.assertEqual(self.panel.current_key(), source_key(self.deep))
+
+    def test_search_uses_presentation_file_association_icon(self):
+        provider = self.panel.file_model.iconProvider()
+        expected = self.window.add_action.icon()
+        with patch.object(provider, "icon", return_value=expected) as association:
+            item = self.search("깊은", 1)
+            self.assertEqual(item.icon().pixmap(24, 24).toImage(), expected.pixmap(24, 24).toImage())
+            self.assertTrue(any(isinstance(call.args[0], QFileInfo)
+                                and Path(call.args[0].filePath()) == self.deep
+                                for call in association.call_args_list))
+
+    def test_search_restores_ready_badge_for_previously_loaded_file(self):
+        self.load(self.a)
+        item = self.search("한글", 1)
+        self.assert_status_icon(item, QStyle.StandardPixmap.SP_DialogApplyButton)
+        self.assertIn("3장", item.text())
+        self.panel.search.clear()
+        item = self.search("한글", 1)
+        self.assert_status_icon(item, QStyle.StandardPixmap.SP_DialogApplyButton)
+        self.assertIn("3장", item.text())
+        self.assertEqual(len(self.factory.threads), 1)
+
+    def test_clear_button_does_not_load_another_file_when_tree_regains_focus(self):
+        self.app.setActiveWindow(self.window)
+        item = self.search("깊은", 1)
+        self.panel.results.scrollToItem(item)
+        self.panel.results.setFocus()
+        self.assertEqual(self.window._sources, {})
+        QTest.mouseClick(self.panel.results.viewport(), Qt.MouseButton.LeftButton,
+                         pos=self.panel.results.visualItemRect(item).center())
+        wait_until(lambda: not self.window.is_loading)
+        before = set(self.window._sources)
+        self.assertEqual(before, {source_key(self.deep)})
+        clear_button = self.panel.search.findChild(QToolButton)
+        QTest.mouseClick(clear_button, Qt.MouseButton.LeftButton)
+        QTest.qWait(150)
+        wait_until(lambda: not self.window.is_loading)
+        self.assertEqual(set(self.window._sources), before)
+        self.assertEqual(len(self.factory.threads), 1)
+        self.assertEqual(self.window.slide_grid.model.slides[0].source_file, str(self.deep))
+
+    def test_clear_multiple_matches_does_not_load_a_sibling_result(self):
+        self.app.setActiveWindow(self.window)
+        self.panel.search.setText("ppt")
+        wait_until(lambda: not self.panel._debounce.isActive() and not self.panel.has_search)
+        self.assertEqual(self.panel.results.count(), 4)
+        item = next(self.panel.results.item(row) for row in range(4)
+                    if source_key(self.panel.results.item(row).data(Qt.ItemDataRole.UserRole)) == source_key(self.deep))
+        self.panel.results.scrollToItem(item)
+        self.panel.results.setFocus()
+        self.assertEqual(self.window._sources, {})
+        QTest.mouseClick(self.panel.results.viewport(), Qt.MouseButton.LeftButton,
+                         pos=self.panel.results.visualItemRect(item).center())
+        wait_until(lambda: not self.window.is_loading)
+        self.assertEqual(set(self.window._sources), {source_key(self.deep)})
+        QTest.mouseClick(self.panel.search.findChild(QToolButton), Qt.MouseButton.LeftButton)
+        QTest.qWait(150)
+        wait_until(lambda: not self.window.is_loading)
+        self.assertEqual(set(self.window._sources), {source_key(self.deep)})
+        self.assertEqual(len(self.factory.threads), 1)
+
+    def test_search_keyboard_selection_loads_only_the_requested_file(self):
+        self.app.setActiveWindow(self.window)
+        self.search("ppt", 4)
+        self.panel.results.setFocus()
+        self.assertEqual(self.window._sources, {})
+        target = Path(self.panel.results.item(1).data(Qt.ItemDataRole.UserRole))
+        QTest.keyClick(self.panel.results, Qt.Key.Key_Down)
+        wait_until(lambda: not self.window.is_loading)
+        self.assertEqual(set(self.window._sources), {source_key(target)})
+        self.assertEqual(self.window.slide_grid.model.slides[0].source_file, str(target))
+
+    def test_tree_automatic_selection_does_not_load_until_keyboard_activation(self):
+        self.app.setActiveWindow(self.window)
+        self.panel.tree.setCurrentIndex(self.index(self.b))
+        self.panel.tree.setFocus()
+        self.assertEqual(self.window._sources, {})
+        QTest.keyClick(self.panel.tree, Qt.Key.Key_Return)
+        wait_until(lambda: not self.window.is_loading)
+        self.assertEqual(set(self.window._sources), {source_key(self.b)})
+
+    def test_clear_search_a_pptx_keeps_only_the_clicked_path(self):
+        self.app.setActiveWindow(self.window)
+        target = self.child / "A.pptx"
+        target.write_bytes(b"fake")
+        self.search("A.pptx", 2)
+        item = next(self.panel.results.item(row) for row in range(2)
+                    if source_key(self.panel.results.item(row).data(Qt.ItemDataRole.UserRole)) == source_key(target))
+        self.panel.results.setFocus()
+        self.click_result(item)
+        wait_until(lambda: not self.window.is_loading)
+        self.assertEqual(set(self.window._sources), {source_key(target)})
+        QTest.mouseClick(self.panel.search.findChild(QToolButton), Qt.MouseButton.LeftButton)
+        QTest.qWait(150)
+        wait_until(lambda: not self.window.is_loading)
+        self.assertEqual(set(self.window._sources), {source_key(target)})
+        self.assertEqual(self.panel.current_key(), source_key(target))
+        self.assertEqual(self.window.slide_grid.model.slides[0].source_file, str(target))
+        self.assertEqual(len(self.factory.threads), 1)
+
+    def test_search_remove_and_clear_reset_badges_and_allow_same_item_retry(self):
+        item = self.search("한글", 1)
+        original_icon = item.icon().pixmap(24, 24).toImage()
+        self.assertFalse(original_icon.isNull())
+        self.click_result(item)
+        wait_until(lambda: not self.window.is_loading)
+        self.window.remove_selected()
+        self.assertNotIn("3장", item.text())
+        self.assertEqual(item.toolTip(), str(self.a))
+        self.assertEqual(item.icon().pixmap(24, 24).toImage(), original_icon)
+        QTest.mouseClick(self.panel.results.viewport(), Qt.MouseButton.LeftButton,
+                         pos=self.panel.results.visualItemRect(item).center())
+        wait_until(lambda: not self.window.is_loading)
+        self.assert_status_icon(item, QStyle.StandardPixmap.SP_DialogApplyButton)
+        self.assertEqual(len(self.factory.threads), 2)
+        self.window.clear_sources()
+        self.assertNotIn("3장", item.text())
+        self.assertEqual(item.icon().pixmap(24, 24).toImage(), original_icon)
+        self.assertTrue(self.a.is_file())
+
+    def test_search_loading_cancel_and_retry_update_status_icons(self):
+        item = self.search("한글", 1)
+        self.factory.delay = 0.06
+        self.click_result(item)
+        wait_until(lambda: self.window._sources[source_key(self.a)].status == "loading")
+        self.assert_status_icon(item, QStyle.StandardPixmap.SP_BrowserReload)
+        self.window.cancel_loading()
+        wait_until(lambda: not self.window.is_loading)
+        self.assert_status_icon(item, QStyle.StandardPixmap.SP_DialogCancelButton)
+        self.assertNotIn("3장", item.text())
+        self.factory.delay = 0
+        self.window.reload_selected()
+        wait_until(lambda: not self.window.is_loading)
+        self.assert_status_icon(item, QStyle.StandardPixmap.SP_DialogApplyButton)
+        self.assertIn("3장", item.text())
+
+    def test_search_failed_file_displays_error_status(self):
+        failed = self.root / "failed.pptx"
+        failed.write_bytes(b"fake")
+        item = self.search("failed", 1)
+        with self.assertLogs("ppt_merge.worker", level="ERROR"):
+            self.click_result(item)
+            wait_until(lambda: not self.window.is_loading)
+        self.assert_status_icon(item, QStyle.StandardPixmap.SP_MessageBoxCritical)
+        self.assertNotIn("HRESULT", item.toolTip())
+        self.assertIn("실패", item.toolTip())
 
     def test_stale_search_results_ignored_after_root_change(self):
         old = self.panel._search_token

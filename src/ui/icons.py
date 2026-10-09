@@ -19,6 +19,7 @@ _PATHS = {
     "last": '<path d="M18 4v16 M6 5l7 7-7 7"/>',
     "folder": '<path d="M3 7V4h7l2 3h9v13H3z"/>',
     "file": '<path d="M14 2H5v20h14V7z M14 2v5h5 M8 12h8 M8 16h6"/>',
+    "presentation": '<path d="M14 2H5v20h14V7z M14 2v5h5 M9 18v-7h3a2 2 0 0 1 0 4H9"/>',
     "help": '<circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 5 M12 17v.2"/>',
     "search": '<circle cx="10" cy="10" r="6"/><path d="M15 15l6 6"/>',
 }
@@ -29,6 +30,8 @@ def icon(name: str) -> QIcon:
     for mode, color in ((QIcon.Mode.Normal, "#475569"),
                         (QIcon.Mode.Disabled, "#94a3b8"),
                         (QIcon.Mode.Active, "#2563eb")):
+        if name == "presentation" and mode != QIcon.Mode.Disabled:
+            color = "#c43e1c"
         svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
                f'fill="none" stroke="{color}" stroke-width="1.8" '
                f'stroke-linecap="round" stroke-linejoin="round">{_PATHS[name]}</svg>')
