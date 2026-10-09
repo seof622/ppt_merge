@@ -18,11 +18,13 @@ class ElidedLabel(QLabel):
     def __init__(self, text: str) -> None:
         super().__init__()
         self._full_text = text
+        self.setToolTip(text)
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self._refresh()
 
     def setText(self, text: str) -> None:
         self._full_text = text
+        self.setToolTip(text)
         self._refresh()
 
     def _refresh(self) -> None:

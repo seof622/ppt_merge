@@ -16,6 +16,7 @@ from src.ui.slide_mime import make_slide_mime, read_slide_mime
 
 class OutputListModel(SlideListModel):
     edited = Signal(object)
+    feedback = Signal(str)
 
     def __init__(self, parent=None, drag_token: str = "") -> None:
         super().__init__(parent, drag_token)
@@ -71,12 +72,12 @@ class OutputListModel(SlideListModel):
         payload = read_slide_mime(data, self.drag_token)
         target = row if row >= 0 else self.rowCount()
         if payload["origin"] == self.origin:
-            self.edit(lambda: self.sequence.move(payload["rows"], target))
+            self.edit(lambda: self.sequence.move(payload["rows"], target), f"{len(payload['rows'])}장 순서 변경")
         else:
             self.add_slides(payload["slides"], target)
         return True
 
-    def edit(self, operation: Callable[[], list[int]]) -> None:
+    def edit(self, operation: Callable[[], list[int]], message: str = "") -> None:
         self.beginResetModel()
         rows = operation()
         self.slides = tuple(self.sequence.slides)
@@ -84,14 +85,16 @@ class OutputListModel(SlideListModel):
         self.revision += 1
         self.endResetModel()
         self.edited.emit(rows)
+        if message:
+            self.feedback.emit(f"{message} · 총 {self.rowCount()}장")
 
     def add_slides(self, slides: Iterable[SlideItem], target: int | None = None) -> None:
         additions = tuple(slides)
         if additions:
-            self.edit(lambda: self.sequence.insert(additions, target))
+            self.edit(lambda: self.sequence.insert(additions, target), f"{len(additions)}장 담음")
 
     def clear(self) -> None:
-        self.edit(lambda: self.sequence.remove(range(self.rowCount())))
+        self.edit(lambda: self.sequence.remove(range(self.rowCount())), "출력 목록 비움")
 
 
 class OutputListView(QListView):
@@ -228,7 +231,9 @@ class OutputPanel(QWidget):
             action.triggered.connect(callback)
             self.addAction(action)
             button = QPushButton(text)
-            button.setToolTip(f"{text} ({shortcut})")
+            description = "선택한 슬라이드를 한 번 더 담기" if key == "duplicate" else text
+            action.setToolTip(f"{description} ({shortcut})")
+            button.setToolTip(action.toolTip())
             button.clicked.connect(action.trigger)
             action.changed.connect(lambda a=action, b=button: b.setEnabled(a.isEnabled()))
             self.actions[key] = action
@@ -271,6 +276,7 @@ class OutputPanel(QWidget):
             index = self.model.index(rows[0], 0)
             selection.setCurrentIndex(index, QItemSelectionModel.SelectionFlag.NoUpdate)
             self.view.scrollTo(index)
+            self.view.setFocus(Qt.FocusReason.OtherFocusReason)
         self._update_actions()
 
     def add_slides(self, slides: Iterable[SlideItem]) -> None:
@@ -279,22 +285,22 @@ class OutputPanel(QWidget):
     def remove_selected(self) -> None:
         rows = self.selected_rows()
         if rows:
-            self.model.edit(lambda: self.model.sequence.remove(rows))
+            self.model.edit(lambda: self.model.sequence.remove(rows), f"{len(rows)}장 삭제")
 
     def duplicate_selected(self) -> None:
         rows = self.selected_rows()
         if rows:
-            self.model.edit(lambda: self.model.sequence.duplicate(rows))
+            self.model.edit(lambda: self.model.sequence.duplicate(rows), f"{len(rows)}장 복제 — 같은 슬라이드를 한 번 더 담음")
 
     def step_selected(self, direction: int) -> None:
         rows = self.selected_rows()
         if rows:
-            self.model.edit(lambda: self.model.sequence.step(rows, direction))
+            self.model.edit(lambda: self.model.sequence.step(rows, direction), f"{len(rows)}장 순서 변경")
 
     def move_selected(self, target: int) -> None:
         rows = self.selected_rows()
         if rows:
-            self.model.edit(lambda: self.model.sequence.move(rows, target))
+            self.model.edit(lambda: self.model.sequence.move(rows, target), f"{len(rows)}장 순서 변경")
 
     def _update_actions(self, *args) -> None:
         rows = self.selected_rows()

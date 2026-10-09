@@ -8,8 +8,8 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import QThread, QTimer, Qt, Slot
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtCore import QThread, QTimer, Qt, QUrl, Slot
+from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (QFileDialog, QLabel, QMainWindow, QProgressBar, QPushButton,
                                QSplitter, QToolBar, QVBoxLayout, QMessageBox, QWidget)
 
@@ -45,6 +45,7 @@ class MainWindow(QMainWindow):
         self._thread: QThread | None = None
         self._worker: PptWorker | None = None
         self._closing = False
+        self._loading_cancelling = False
         self._generation_factory = generation_service_factory or PowerPointService
         self._generation_thread: QThread | None = None
         self._generation_worker: GenerationWorker | None = None
@@ -53,6 +54,7 @@ class MainWindow(QMainWindow):
         self._generation_cancelling = False
         self._allow_mixed_sizes: bool | None = None
         self.last_generation_result: GenerationResult | None = None
+        self._last_saved_result: GenerationResult | None = None
 
         toolbar = QToolBar("파일 작업")
         toolbar.setMovable(False)
@@ -109,6 +111,7 @@ class MainWindow(QMainWindow):
         self.generate_button.clicked.connect(self.choose_output)
         self.output_panel.footer.addWidget(self.generate_button)
         self.output_panel.model.modelReset.connect(self._update_actions)
+        self.output_panel.model.feedback.connect(self._on_output_feedback)
         self.setCentralWidget(container)
         self.source_panel.current_source_changed.connect(self._show_source)
         self.source_panel.selection_changed.connect(self._update_actions)
@@ -125,6 +128,14 @@ class MainWindow(QMainWindow):
         self.cancel_button.clicked.connect(self.cancel_loading)
         self.cancel_button.hide()
         status.addPermanentWidget(self.cancel_button)
+        self.open_file_button = QPushButton("PPT 파일 열기")
+        self.open_file_button.clicked.connect(self._open_output_file)
+        self.open_file_button.hide()
+        status.addPermanentWidget(self.open_file_button)
+        self.open_output_button = QPushButton("저장 폴더 열기")
+        self.open_output_button.clicked.connect(self._open_output_folder)
+        self.open_output_button.hide()
+        status.addPermanentWidget(self.open_output_button)
         self._update_actions()
 
     @property
@@ -138,6 +149,32 @@ class MainWindow(QMainWindow):
     @property
     def is_busy(self) -> bool:
         return self.is_loading or self.is_generating
+
+    @Slot(str)
+    def _on_output_feedback(self, message: str) -> None:
+        if not self.is_busy and not self._closing:
+            self.status_text.setText(message)
+
+    def _open_output_file(self) -> None:
+        if self.is_busy or self._closing or self._last_saved_result is None:
+            return
+        path = Path(self._last_saved_result.output_path)
+        if not path.is_file():
+            self._show_generation_error("저장한 PPT 파일을 찾을 수 없습니다. 파일이 이동되거나 삭제되었는지 확인하세요.")
+        elif not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+            self._show_generation_error(f"PPT 파일을 열지 못했습니다. PowerPoint 연결 설정을 확인하세요: {path}")
+        else:
+            self.notice.hide()
+            self.status_text.setText("PPT 파일 열기를 요청했습니다. 다시 생성하려면 PowerPoint를 닫아 주세요.")
+
+    def _open_output_folder(self) -> None:
+        if self.is_busy or self._closing or self._last_saved_result is None:
+            return
+        directory = Path(self._last_saved_result.output_path).parent
+        if not directory.is_dir():
+            self._show_generation_error("저장 폴더를 찾을 수 없습니다. 파일이 이동되었는지 확인하세요.")
+        elif not QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory))):
+            self._show_generation_error(f"저장 폴더를 열지 못했습니다. 탐색기에서 확인하세요: {directory}")
 
     def choose_output(self) -> None:
         if self.is_busy or self._closing:
@@ -195,6 +232,7 @@ class MainWindow(QMainWindow):
         thread.finished.connect(self._generation_finished, Qt.ConnectionType.QueuedConnection)
         self.progress_bar.setRange(0, 0)
         self.progress_bar.show()
+        self.cancel_button.setText("취소")
         self.cancel_button.setEnabled(True)
         self.cancel_button.show()
         self.status_text.setText("PPT 생성 작업을 준비합니다…")
@@ -208,11 +246,15 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def _on_generated(self, result: GenerationResult) -> None:
         self.last_generation_result = result
+        self._last_saved_result = result
+        self.open_file_button.setToolTip(f"{result.output_path}\n다시 생성하려면 PowerPoint를 닫아 주세요.")
+        self.open_output_button.setToolTip(f"{Path(result.output_path).name}\n{Path(result.output_path).parent}")
         self._generation_outcome = f"저장 완료 · {result.slide_count}장 · {result.output_path}"
-        self.status_text.setToolTip(result.output_path)
 
     @Slot(object)
     def _on_generation_progress(self, event: GenerationProgress) -> None:
+        if self._generation_cancelling or self._closing:
+            return
         labels = {"checking": "원본 확인", "opening": "PowerPoint 시작", "copying": "슬라이드 결합",
                   "saving": "PPT 저장", "saved": "PowerPoint 정리", "verifying": "결과 확인", "publishing": "결과 파일 저장", "completed": "저장 완료"}
         self.progress_bar.setRange(0, event.total if event.stage in ("checking", "copying", "completed") else 0)
@@ -309,6 +351,7 @@ class MainWindow(QMainWindow):
     def _start_pending(self) -> None:
         if self.is_busy or not self._pending or self._closing:
             return
+        self._loading_cancelling = False
         self._active = tuple(self._pending)
         self._pending.clear()
         sources = tuple(self._sources[key].path for key in self._active)
@@ -326,6 +369,7 @@ class MainWindow(QMainWindow):
         self._thread.finished.connect(self._worker_finished, Qt.ConnectionType.QueuedConnection)
         self.progress_bar.setRange(0, 0)
         self.progress_bar.show()
+        self.cancel_button.setText("취소")
         self.cancel_button.setEnabled(True)
         self.cancel_button.show()
         self.status_text.setText("PPT를 불러오는 중입니다…")
@@ -340,12 +384,14 @@ class MainWindow(QMainWindow):
             return
         state.result, state.error, state.status = result, "", "ready"
         suffix = " · 캐시" if result.cache_hit else ""
-        self.source_panel.set_state(key, path, f"{result.presentation.slide_count}장{suffix}")
+        self.source_panel.set_state(key, path, f"{result.presentation.slide_count}장{suffix}", state="ready")
         if key == self.source_panel.current_key():
             self._show_source(key)
 
     @Slot(str, object)
     def _on_progress(self, path: str, event: ThumbnailProgress) -> None:
+        if self._loading_cancelling or self._closing:
+            return
         key = os.path.normcase(path)
         state = self._sources.get(key)
         if state is None:
@@ -354,11 +400,12 @@ class MainWindow(QMainWindow):
         labels = {"checking": "파일 확인", "loading": "PPT 읽기", "exporting": "썸네일 생성",
                   "cached": "캐시 불러오기", "completed": "완료"}
         label = labels.get(event.stage, "불러오기")
-        self.status_text.setText(f"{Path(path).name} · {label}"
+        position = f"파일 {self._active.index(key) + 1}/{len(self._active)} · " if key in self._active else ""
+        self.status_text.setText(f"{position}{Path(path).name} · {label}"
                                  + (f" {event.completed}/{event.total}" if event.total else "…"))
         self.progress_bar.setRange(0, event.total if event.total else 0)
         self.progress_bar.setValue(event.completed)
-        self.source_panel.set_state(key, path, "불러오는 중")
+        self.source_panel.set_state(key, path, "불러오는 중", label, state="loading")
         if key == self.source_panel.current_key() and state.result is None:
             self._show_source(key)
 
@@ -369,7 +416,7 @@ class MainWindow(QMainWindow):
         if state:
             state.status, state.error = "failed", message
             state.result = None
-            self.source_panel.set_state(key, path, "읽기 실패", message)
+            self.source_panel.set_state(key, path, "읽기 실패", message, state="failed")
             if key == self.source_panel.current_key():
                 self._show_source(key)
 
@@ -382,7 +429,7 @@ class MainWindow(QMainWindow):
     def _mark_cancelled(self, key: str) -> None:
         state = self._sources[key]
         state.status = "cancelled"
-        self.source_panel.set_state(key, state.path, "불러오기 취소")
+        self.source_panel.set_state(key, state.path, "불러오기 취소", state="cancelled")
         if key == self.source_panel.current_key():
             self._show_source(key)
 
@@ -403,10 +450,7 @@ class MainWindow(QMainWindow):
             thread.deleteLater()
         self.progress_bar.hide()
         self.cancel_button.hide()
-        ready = [state for state in self._sources.values() if state.status == "ready"]
-        failed = sum(state.status == "failed" for state in self._sources.values())
-        count = sum(state.result.presentation.slide_count for state in ready)
-        self.status_text.setText(f"{len(ready)}개 파일 · {count}장 준비됨" + (f" · 읽기 실패 {failed}개" if failed else ""))
+        self._update_summary()
         self._update_actions()
         if self._closing:
             QTimer.singleShot(0, self.close)
@@ -416,6 +460,7 @@ class MainWindow(QMainWindow):
     def cancel_loading(self) -> None:
         if self._generation_worker is not None:
             self._generation_cancelling = True
+            self.cancel_button.setText("취소 중…")
             self._generation_worker.request_cancel()
             self.cancel_button.setEnabled(False)
             self.status_text.setText("현재 작업을 마친 뒤 PPT 생성을 취소합니다…")
@@ -423,6 +468,8 @@ class MainWindow(QMainWindow):
             self._mark_cancelled(key)
         self._pending.clear()
         if self._worker is not None:
+            self._loading_cancelling = True
+            self.cancel_button.setText("취소 중…")
             self._worker.request_cancel()
             self.cancel_button.setEnabled(False)
             self.status_text.setText("현재 슬라이드 작업을 마친 뒤 취소합니다…")
@@ -445,6 +492,8 @@ class MainWindow(QMainWindow):
     def _update_actions(self) -> None:
         selected = bool(self.source_panel.selected_keys())
         available = not self.is_busy and not self._closing
+        self.open_file_button.setVisible(self._last_saved_result is not None and available)
+        self.open_output_button.setVisible(self._last_saved_result is not None and available)
         self.remove_action.setEnabled(selected and available)
         self.reload_action.setEnabled(selected and available)
         self.clear_action.setEnabled(bool(self._sources) and available)
@@ -476,7 +525,11 @@ class MainWindow(QMainWindow):
     def _update_summary(self) -> None:
         ready = [state for state in self._sources.values() if state.status == "ready"]
         count = sum(state.result.presentation.slide_count for state in ready)
-        self.status_text.setText(f"{len(ready)}개 파일 · {count}장 준비됨")
+        failed = sum(state.status == "failed" for state in self._sources.values())
+        cancelled = sum(state.status == "cancelled" for state in self._sources.values())
+        self.status_text.setText(f"{len(ready)}개 파일 · {count}장 준비됨"
+                                 + (f" · 읽기 실패 {failed}개" if failed else "")
+                                 + (f" · 취소 {cancelled}개" if cancelled else ""))
 
     def reload_selected(self) -> None:
         if self.is_busy or self._closing:

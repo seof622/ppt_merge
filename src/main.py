@@ -32,6 +32,7 @@ QListView#slideView { border: none; background: #f8fafc; outline: none; }
 QListView#slideView::item { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; }
 QListView#slideView::item:selected { background: #eff6ff; border: 2px solid #3b82f6; color: #1e40af; }
 QListView#outputView { border: 1px solid #cbd5e1; border-radius: 6px; background: #f8fafc; outline: none; }
+QListView#outputView:focus { border-color: #3b82f6; }
 QListView#outputView::item { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; padding: 6px; }
 QListView#outputView::item:selected { background: #eff6ff; border: 2px solid #3b82f6; color: #1e40af; }
 QStatusBar { background: #ffffff; border-top: 1px solid #e2e8f0; padding: 6px 14px; }

@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QAbstractItemView, QFrame, QLabel, QListWidget, QListWidgetItem, QVBoxLayout
+from PySide6.QtWidgets import QAbstractItemView, QFrame, QLabel, QListWidget, QListWidgetItem, QStyle, QVBoxLayout
 
 
 class SourcePanel(QFrame):
@@ -42,11 +42,17 @@ class SourcePanel(QFrame):
         item.setToolTip(path)
         self._items[key] = item
         self.list.addItem(item)
+        self.set_state(key, path, "읽기 대기")
         self.heading.setText(f"소스 파일 · {len(self._items)}개")
 
-    def set_state(self, key: str, path: str, status: str, detail: str = "") -> None:
+    def set_state(self, key: str, path: str, status: str, detail: str = "", *, state: str = "queued") -> None:
         item = self._items.get(key)
         if item:
+            icons = {"ready": QStyle.StandardPixmap.SP_DialogApplyButton,
+                     "loading": QStyle.StandardPixmap.SP_BrowserReload,
+                     "failed": QStyle.StandardPixmap.SP_MessageBoxCritical,
+                     "cancelled": QStyle.StandardPixmap.SP_DialogCancelButton}
+            item.setIcon(self.style().standardIcon(icons.get(state, QStyle.StandardPixmap.SP_FileIcon)))
             item.setText(f"{Path(path).name}\n{status}")
             item.setToolTip(path + (f"\n{detail}" if detail else ""))
 

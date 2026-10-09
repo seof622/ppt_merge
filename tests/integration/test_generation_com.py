@@ -175,6 +175,8 @@ class GenerationComTests(unittest.TestCase):
             self.assertIsNotNone(window.last_generation_result, window.notice.text())
             self.assertGreater(len(ticks), 0)
             self.assertEqual(window.last_generation_result.slide_count, 4)
+            self.assertTrue(window.open_output_button.isVisible())
+            self.assertIn(str(output), window.status_text.toolTip())
             self.assertEqual(window.output_panel.output_slides, [data[key][n - 1] for key, n in pairs])
             window.grab().save(str(self.directory / "generated.png"))
             window.resize(1000, 640)
@@ -283,6 +285,8 @@ class GenerationComTests(unittest.TestCase):
                 if window.progress_bar.maximum() == 40 and window.progress_bar.value() > 0:
                     timer.stop()
                     window.close()
+                    self.assertEqual(window.cancel_button.text(), "취소 중…")
+                    self.assertIn("정리한 뒤 창을 닫", window.status_text.toolTip())
 
             timer.timeout.connect(close_after_first_slide)
             timer.start()
