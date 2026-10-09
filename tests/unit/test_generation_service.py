@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from zipfile import ZipFile
+from zipfile import ZipFile, ZipInfo
 
 from src.models.slide_model import SlideItem
 from src.ppt.errors import GenerationError, OperationCancelled, SourceChangedError, check_cancel
@@ -14,11 +14,23 @@ from src.ppt.source_validation import fingerprint, revision
 
 
 def write_deck(path, ids=(256, 257, 258), size=(12192000, 6858000), marker=""):
+    p = "http://schemas.openxmlformats.org/presentationml/2006/main"
+    r = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    rel = "http://schemas.openxmlformats.org/package/2006/relationships"
+    parts = {
+        "[Content_Types].xml": '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>',
+        "_rels/.rels": f'<Relationships xmlns="{rel}"><Relationship Id="root" Type="{r}/officeDocument" Target="ppt/presentation.xml"/></Relationships>',
+        "ppt/presentation.xml": f'<p:presentation xmlns:p="{p}" xmlns:r="{r}">'
+            + '<p:sldIdLst>' + ''.join(f'<p:sldId id="{id}" r:id="rId{i}"/>' for i, id in enumerate(ids, 1))
+            + '</p:sldIdLst>' + f'<p:sldSz cx="{size[0]}" cy="{size[1]}"/><!--{marker}--></p:presentation>',
+        "ppt/_rels/presentation.xml.rels": f'<Relationships xmlns="{rel}">'
+            + ''.join(f'<Relationship Id="rId{i}" Type="{r}/slide" Target="slides/slide{i}.xml"/>'
+                      for i in range(1, len(ids) + 1)) + '</Relationships>',
+    }
+    parts.update({f"ppt/slides/slide{i}.xml": f'<p:sld xmlns:p="{p}"/>' for i in range(1, len(ids) + 1)})
     with ZipFile(path, "w") as archive:
-        archive.writestr("ppt/presentation.xml", '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">'
-                         + '<p:sldIdLst>' + ''.join(f'<p:sldId id="{id}"/>' for id in ids) + '</p:sldIdLst>'
-                         + f'<p:sldSz cx="{size[0]}" cy="{size[1]}"/><!--{marker}--></p:presentation>')
-        archive.writestr("ppt/_rels/presentation.xml.rels", '<Relationships/>')
+        for name, content in parts.items():
+            archive.writestr(ZipInfo(name, (2020, 1, 1, 0, 0, 0)), content)
 
 
 class GenerationTests(unittest.TestCase):

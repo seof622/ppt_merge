@@ -10,13 +10,14 @@ import math
 import os
 from pathlib import Path
 import tempfile
+import time
 from typing import Any, Protocol
 from zipfile import ZipFile
 import xml.etree.ElementTree as ET
 
 from src.models.slide_model import SlideItem
 from src.ppt.errors import (CancelCallback, GenerationError, PowerPointError,
-                            SourceChangedError, check_cancel)
+                            SourceChangedError, check_cancel, file_error_message)
 from src.ppt.presentation_manager import PresentationManager
 from src.ppt.source_validation import file_hash, fingerprint, revision, validate_source
 
@@ -106,7 +107,7 @@ class PowerPointService:
                 check_cancel(cancel)
                 if progress:
                     progress(GenerationProgress("checking", completed - 1, len(groups), str(source)))
-                validate_source(source)
+                validate_source(source, cancel)
                 identity = revision(fingerprint(source, cancel))
                 if any(item.source_revision is None or item.source_revision != identity for item in items):
                     raise SourceChangedError(
@@ -132,6 +133,9 @@ class PowerPointService:
             return GenerationPlan(selection, tuple(sources), str(path), output_revision, overwrite)
         except PowerPointError:
             raise
+        except OSError as error:
+            LOGGER.exception("PPT 생성 준비 파일 접근 실패")
+            raise GenerationError(file_error_message(error)) from error
         except Exception as error:
             LOGGER.exception("PPT 생성 준비 실패")
             raise GenerationError("원본이나 저장 경로를 확인하지 못했습니다. 경로·권한과 로그를 확인하세요.") from error
@@ -146,6 +150,8 @@ class PowerPointService:
         if plan.mixed_sizes and not allow_mixed_sizes:
             raise GenerationError("슬라이드 크기가 다릅니다. 첫 출력 슬라이드 크기 사용을 확인해야 합니다.")
         path = Path(plan.output_path)
+        started = time.perf_counter()
+        LOGGER.info("PPT 생성 시작 원본=%s 출력=%s장 경로=%s", len(plan.sources), len(plan.slides), path)
         try:
             check_cancel(cancel)
             self._check_sources(plan, cancel)
@@ -178,10 +184,14 @@ class PowerPointService:
                     else:
                         os.replace(staged, path)
             report("completed", len(plan.slides))
-            LOGGER.info("PPT 생성 완료 %s %s장", path, len(plan.slides))
+            LOGGER.info("PPT 생성 완료 %s %s장 %.3f초", path, len(plan.slides), time.perf_counter() - started)
             return GenerationResult(str(path), len(plan.slides))
-        except PowerPointError:
+        except PowerPointError as error:
+            LOGGER.info("PPT 생성 중단 %s %.3f초: %s", type(error).__name__, time.perf_counter() - started, error)
             raise
+        except OSError as error:
+            LOGGER.exception("PPT 생성·저장 파일 접근 실패")
+            raise GenerationError(file_error_message(error)) from error
         except Exception as error:
             LOGGER.exception("PPT 생성·저장 실패")
             raise GenerationError("PPT를 생성하거나 저장하지 못했습니다. 파일 사용 상태·권한과 로그를 확인하세요.") from error

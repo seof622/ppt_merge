@@ -10,7 +10,7 @@
 - pywin32 (`pythoncom` 포함)
 - 설치된 Microsoft PowerPoint
 
-현재 PPT 파일 목록·썸네일 보기·출력 순서 편집과 **새 PPTX 생성**이 구현되어 있습니다. 원본 서식·마스터·레이아웃을 보존하는 PowerPoint COM 방식으로 결합하고 내부 슬라이드 링크를 재연결합니다. 단위 테스트 64개, 실제 Office 생성 검증 9개 사례와 OneDrive 저장·덮어쓰기 검증 2개, 실제 PPT 캐시 UI 회귀 검증 1개를 통과했습니다. 생성과 검증 결과는 [PPT 생성 안내](docs/generation_validation.md), 기존 단계는 [기본 보존](docs/poc_validation.md), [고급 보존](docs/advanced_validation.md), [썸네일](docs/thumbnail_validation.md), [기본 UI](docs/ui_validation.md), [출력 편집](docs/output_composer_validation.md)을 참고하세요.
+현재 PPT 파일 목록·썸네일 보기·출력 순서 편집과 **새 PPTX 생성**이 구현되어 있습니다. 원본 서식·마스터·레이아웃을 보존하는 PowerPoint COM 방식으로 결합하고 내부 슬라이드 링크를 재연결합니다. Phase 6 신뢰성 작업까지 완료했고 단위 테스트 84개와 실제 Office 통합 테스트 22개(신뢰성 5개·생성 9개·썸네일 8개)를 통과했습니다. 합성 자료 20개 파일·500장의 생성은 약 54초, 캐시 재로딩은 약 2.1초였습니다. 측정 범위와 재검증 방법은 [신뢰성 검증](docs/reliability_validation.md)에 정리했습니다. OneDrive 저장·덮어쓰기 검증 2개와 실제 PPT 캐시 UI 회귀 검증 1개도 앞서 통과했습니다. 생성과 검증 결과는 [PPT 생성 안내](docs/generation_validation.md), 기존 단계는 [기본 보존](docs/poc_validation.md), [고급 보존](docs/advanced_validation.md), [썸네일](docs/thumbnail_validation.md), [기본 UI](docs/ui_validation.md), [출력 편집](docs/output_composer_validation.md)을 참고하세요.
 
 ## 앱 실행
 

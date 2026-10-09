@@ -7,7 +7,6 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from zipfile import ZipFile, ZipInfo
 
 from PIL import Image
 
@@ -15,6 +14,7 @@ from src.models.presentation_model import PresentationInfo
 from src.models.slide_model import SlideItem
 from src.ppt.errors import OperationCancelled, PresentationOpenError, SourceChangedError, ThumbnailError
 from src.ppt.thumbnail_service import ThumbnailService
+from tests.unit.test_generation_service import write_deck
 
 
 @dataclass
@@ -64,10 +64,7 @@ class ThumbnailServiceTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def write_source(self, marker):
-        with ZipFile(self.source, "w") as archive:
-            for name, content in (("ppt/presentation.xml", f"<root><!--{marker}--></root>"),
-                                  ("ppt/_rels/presentation.xml.rels", "<Relationships/>")):
-                archive.writestr(ZipInfo(name, (2020, 1, 1, 0, 0, 0)), content)
+        write_deck(self.source, marker=marker)
 
     def assert_no_partial(self):
         self.assertFalse(any(p.name.startswith((".staging-", ".retired-")) or p.suffix == ".lock"
@@ -178,6 +175,69 @@ class ThumbnailServiceTests(unittest.TestCase):
             with self.assertLogs("ppt_merge.thumbnails", level="ERROR"):
                 with self.assertRaises(ThumbnailError):
                     self.service.load(self.source)
+        self.assertEqual(manifest.read_bytes(), before)
+        self.assert_no_partial()
+
+    def test_transient_windows_publish_denial_retries_without_regenerating(self):
+        rename = Path.rename
+        attempts = 0
+        def transient(path, target):
+            nonlocal attempts
+            if path.name.startswith(".staging-"):
+                attempts += 1
+                if attempts <= 2:
+                    error = PermissionError("일시적 Windows 공유 오류")
+                    error.winerror = 5
+                    raise error
+            return rename(path, target)
+        with patch.object(Path, "rename", transient), patch("src.ppt.thumbnail_service.time.sleep"):
+            result = self.service.load(self.source)
+        self.assertEqual(attempts, 3)
+        self.assertEqual(self.recorder.exported, [1, 2, 3])
+        self.assertTrue(self.service.load(self.source).cache_hit)
+        self.assert_no_partial()
+
+    def test_persistent_windows_denial_has_bounded_retries_and_preserves_old_cache(self):
+        result = self.service.load(self.source)
+        manifest = Path(result.cache_directory) / "manifest.json"
+        before = manifest.read_bytes()
+        Path(result.presentation.slides[1].thumbnail_path).unlink()
+        rename = Path.rename
+        attempts = 0
+        def denied(path, target):
+            nonlocal attempts
+            if path.name.startswith(".staging-"):
+                attempts += 1
+                error = PermissionError("지속적 Windows 권한 오류")
+                error.winerror = 5
+                raise error
+            return rename(path, target)
+        with patch.object(Path, "rename", denied), patch("src.ppt.thumbnail_service.time.sleep"):
+            with self.assertLogs("ppt_merge.thumbnails", level="WARNING"):
+                with self.assertRaisesRegex(ThumbnailError, "권한"):
+                    self.service.load(self.source)
+        self.assertEqual(attempts, 5)
+        self.assertEqual(manifest.read_bytes(), before)
+        self.assert_no_partial()
+
+    def test_cancel_during_windows_publish_retry_restores_old_cache(self):
+        result = self.service.load(self.source)
+        manifest = Path(result.cache_directory) / "manifest.json"
+        before = manifest.read_bytes()
+        Path(result.presentation.slides[1].thumbnail_path).unlink()
+        rename = Path.rename
+        cancelled = False
+        def denied(path, target):
+            nonlocal cancelled
+            if path.name.startswith(".staging-"):
+                cancelled = True
+                error = PermissionError("일시적 Windows 공유 오류")
+                error.winerror = 32
+                raise error
+            return rename(path, target)
+        with patch.object(Path, "rename", denied), patch("src.ppt.thumbnail_service.time.sleep"):
+            with self.assertRaises(OperationCancelled):
+                self.service.load(self.source, cancel=lambda: cancelled)
         self.assertEqual(manifest.read_bytes(), before)
         self.assert_no_partial()
 

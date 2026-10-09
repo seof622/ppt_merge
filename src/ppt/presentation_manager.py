@@ -50,7 +50,7 @@ class PresentationManager:
         self._com = pythoncom
         self._thread_id = threading.get_ident()
         try:
-            self._app = win32com.client.DispatchEx("PowerPoint.Application")
+            self._app = self._start_application(win32com.client.DispatchEx)
             created = process_pids("POWERPNT.EXE") - before
             if len(created) != 1:
                 raise PowerPointError("앱 소유 PowerPoint를 식별하지 못했습니다.")
@@ -65,6 +65,21 @@ class PresentationManager:
             if not isinstance(error, Exception):
                 raise
             raise PowerPointError("Microsoft PowerPoint를 시작하지 못했습니다. 설치 상태와 로그를 확인하세요.") from error
+
+    def _start_application(self, dispatch: Callable[[str], Any]) -> Any:
+        """서버 실행 실패 뒤 실행 중인 PowerPoint가 없을 때만 한 번 재시도한다."""
+        for attempt in range(2):
+            try:
+                return dispatch("PowerPoint.Application")
+            except Exception as error:
+                if attempt or getattr(error, "hresult", None) != -2146959355:
+                    raise
+                if process_pids("POWERPNT.EXE"):
+                    raise
+                LOGGER.warning("PowerPoint 서버 실행 실패(0x80080005), 프로세스 없음 확인 후 1회 재시도")
+                time.sleep(1)
+                if process_pids("POWERPNT.EXE"):
+                    raise
 
     def _assert_thread(self) -> None:
         if self._thread_id != threading.get_ident():

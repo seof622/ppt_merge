@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
+import time
 from typing import Any, Protocol
 
 from PIL import Image
@@ -19,7 +20,7 @@ from PIL import Image
 from src.models.presentation_model import PresentationInfo
 from src.models.slide_model import SlideItem
 from src.ppt.errors import (CancelCallback, OperationCancelled, PresentationOpenError,
-                            SourceChangedError, ThumbnailError, check_cancel)
+                            SourceChangedError, ThumbnailError, check_cancel, file_error_message)
 from src.ppt.source_validation import (file_hash as _file_hash, fingerprint as _fingerprint,
                                        validate_source as _validate_source, revision)
 from src.ppt.presentation_manager import PresentationManager
@@ -79,6 +80,22 @@ def _manifest_hash(manifest: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
+def _rename_cache(source: Path, target: Path, cancel: CancelCallback | None = None) -> None:
+    """Windows의 일시적인 공유·접근 거부만 최대 0.75초 재시도한다."""
+    delays = (0.05, 0.1, 0.2, 0.4)
+    for attempt in range(len(delays) + 1):
+        check_cancel(cancel)
+        try:
+            source.rename(target)
+            return
+        except OSError as error:
+            if getattr(error, "winerror", None) not in (5, 32, 33) or attempt == len(delays):
+                raise
+            LOGGER.warning("캐시 폴더 교체 재시도 %s/%s winerror=%s",
+                           attempt + 1, len(delays), error.winerror)
+            time.sleep(delays[attempt])
+
+
 class ThumbnailService:
     """호출 스레드에서 동작한다. UI는 추후 워커에서 호출하고 데이터만 받는다."""
 
@@ -135,7 +152,7 @@ class ThumbnailService:
             raise
         except OSError as error:
             LOGGER.exception("썸네일 파일 작업 실패 %s", path)
-            raise ThumbnailError("미리보기 파일을 읽거나 저장하지 못했습니다. 경로·권한과 로그를 확인하세요.") from error
+            raise ThumbnailError(file_error_message(error)) from error
 
     def _load(self, path: Path, progress: ProgressCallback | None,
               cancel: CancelCallback | None) -> ThumbnailResult:
@@ -143,7 +160,7 @@ class ThumbnailService:
             if progress:
                 progress(ThumbnailProgress(str(path), stage, completed, total))
 
-        _validate_source(path)
+        _validate_source(path, cancel)
         report("checking", 0, 0)
         identity = {"version": CACHE_VERSION, "source": _fingerprint(path, cancel), "width": self.width}
         key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
@@ -199,7 +216,7 @@ class ThumbnailService:
                 (staging / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2),
                                                       encoding="utf-8")
                 check_cancel(cancel)
-                self._publish(staging, directory)
+                self._publish(staging, directory, cancel)
                 result_info = replace(info, slides=tuple(replace(slide, thumbnail_path=str(
                     directory / f"slide_{slide.slide_index}.png"),
                     source_revision=revision(identity["source"])) for slide in info.slides))
@@ -209,10 +226,10 @@ class ThumbnailService:
         finally:
             lock.unlink(missing_ok=True)
 
-    def _publish(self, staging: Path, directory: Path) -> None:
+    def _publish(self, staging: Path, directory: Path, cancel: CancelCallback | None = None) -> None:
         """기존 캐시는 새 이미지·메타데이터가 모두 완성된 뒤 교체한다."""
         if not directory.exists():
-            staging.rename(directory)
+            _rename_cache(staging, directory, cancel)
             return
         if directory.is_symlink() or not directory.is_dir():
             raise ThumbnailError("캐시 저장 위치가 올바른 폴더가 아닙니다.")
@@ -220,12 +237,12 @@ class ThumbnailService:
         backup = retired / "previous"
         removable = True
         try:
-            directory.rename(backup)
+            _rename_cache(directory, backup, cancel)
             try:
-                staging.rename(directory)
+                _rename_cache(staging, directory, cancel)
             except BaseException:
                 try:
-                    backup.rename(directory)
+                    _rename_cache(backup, directory)
                 except OSError as error:
                     removable = False
                     LOGGER.exception("기존 캐시 복원 실패. 복구 자료 보관 %s", backup)
