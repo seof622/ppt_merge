@@ -22,7 +22,7 @@ QToolBar { background: #ffffff; border: none; border-bottom: 1px solid #e2e8f0; 
 QToolButton { padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #ffffff; }
 QToolButton:hover { background: #eff6ff; border-color: #93c5fd; }
 QToolButton:disabled { color: #94a3b8; border-color: #e2e8f0; }
-QFrame#sourcePanel { background: #ffffff; border-right: 1px solid #e2e8f0; }
+QFrame#sourcePanel, QFrame#originalsPanel { background: #ffffff; border-right: 1px solid #e2e8f0; }
 QLabel#sectionTitle { font-size: 18px; font-weight: 600; }
 QLabel#mutedText { color: #64748b; font-size: 12px; }
 QLabel#emptyState { color: #64748b; padding: 36px; font-size: 16px; }
@@ -49,9 +49,6 @@ QLineEdit:focus { border-color: #3b82f6; }
 QTreeView, QListWidget#fileSearchResults { background: #ffffff; border: none; outline: none; }
 QTreeView::item, QListWidget#fileSearchResults::item { padding: 6px; }
 QTreeView::item:selected, QListWidget#fileSearchResults::item:selected { background: #dbeafe; color: #1e40af; }
-QTabWidget::pane { border: none; background: #ffffff; }
-QTabBar::tab { background: #ffffff; color: #64748b; padding: 7px 12px; border-bottom: 2px solid #e2e8f0; }
-QTabBar::tab:selected { color: #1d4ed8; border-bottom: 2px solid #3b82f6; }
 """
 
 

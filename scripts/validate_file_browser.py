@@ -108,14 +108,25 @@ def main() -> None:
         report["captures"].append(filename)
         assert window.output_panel.view.width() > 0
         assert window.generate_button.isVisible()
+        assert panel.isVisible() and panel.originals_panel.isVisible()
+        assert panel.geometry().right() < panel.originals_panel.geometry().left()
+        assert panel.originals_panel.geometry().right() < window.slide_grid.geometry().left()
     assert app.activeModalWidget() is None
-    assert panel.tabs.currentIndex() == 0
+    report["separate_originals_card"] = True
     panel.search.setText("advanced")
     wait_until(lambda: not panel._debounce.isActive() and not panel.has_search)
     assert panel.results.count() >= 2
     QTest.qWait(100)
     assert window.grab().save(str(directory / "main_search.png"))
     report["search_matches"] = panel.results.count()
+    original = panel._items[source_key(paths[0])]
+    QTest.mouseClick(panel.list.viewport(), Qt.MouseButton.LeftButton,
+                     pos=panel.list.visualItemRect(original).center())
+    assert panel.search.text() == "advanced"
+    assert panel.stack.currentWidget() == panel.results
+    assert panel.current_key() == source_key(paths[0])
+    assert window.slide_grid.model.slides[0].source_file == str(paths[0])
+    report["original_selection_preserves_search"] = True
     panel.search.clear()
     QTest.qWait(150)
     assert set(window._sources) == {source_key(path) for path in paths}

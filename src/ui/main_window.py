@@ -110,17 +110,25 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.notice)
         splitter = QSplitter(Qt.Orientation.Horizontal)
         self.source_panel = SourcePanel()
-        self.source_panel.setMinimumWidth(240)
+        self.source_panel.setMinimumWidth(220)
         self.source_panel.setMaximumWidth(420)
+        self.originals_panel = self.source_panel.originals_panel
+        self.originals_panel.setMinimumWidth(200)
+        self.originals_panel.setMaximumWidth(420)
         drag_token = uuid4().hex
         self.slide_grid = SlideGrid(drag_token=drag_token)
         self.output_panel = OutputPanel(drag_token=drag_token)
         self.slide_grid.add_requested.connect(self.output_panel.add_slides)
         splitter.addWidget(self.source_panel)
+        splitter.addWidget(self.originals_panel)
         splitter.addWidget(self.slide_grid)
-        splitter.setSizes([290, 1310])
+        splitter.setSizes([270, 230, 1100])
         splitter.setCollapsible(0, False)
         splitter.setCollapsible(1, False)
+        splitter.setCollapsible(2, False)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 0)
+        splitter.setStretchFactor(2, 1)
         composer = QSplitter(Qt.Orientation.Vertical)
         composer.addWidget(splitter)
         composer.addWidget(self.output_panel)
@@ -364,7 +372,7 @@ class MainWindow(QMainWindow):
         key = os.path.normcase(str(Path(path).resolve()))
         self.add_sources([path])
         if key in self._sources:
-            self._show_source(key)
+            self.source_panel.select_source(key, from_browser=True)
             self._update_actions()
 
     def _sidebar_search_finished(self) -> None:
@@ -566,6 +574,7 @@ class MainWindow(QMainWindow):
         self.output_panel.setEnabled(not self.is_generating and not self._closing)
         self.slide_grid.setEnabled(not self.is_generating and not self._closing)
         self.source_panel.setEnabled(not self.is_generating and not self._closing)
+        self.originals_panel.setEnabled(not self.is_generating and not self._closing)
 
     def remove_selected(self) -> None:
         if self.is_busy or self._closing:

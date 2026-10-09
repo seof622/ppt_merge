@@ -1,8 +1,8 @@
 """메인 화면의 폴더 탐색과 읽은 원본 목록. COM을 호출하지 않는다."""
 from pathlib import Path
-from PySide6.QtCore import QDir, QEvent, QStandardPaths, QTimer, Qt, Signal, Slot
-from PySide6.QtWidgets import (QAbstractItemView, QFileSystemModel, QFrame, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QStackedWidget, QTabWidget, QTreeView, QVBoxLayout)
+from PySide6.QtCore import QDir, QEvent, QItemSelectionModel, QSignalBlocker, QStandardPaths, QTimer, Qt, Signal, Slot
+from PySide6.QtWidgets import (QAbstractItemView, QFileSystemModel, QFrame, QHBoxLayout, QLabel,
+    QLineEdit, QListWidget, QListWidgetItem, QStackedWidget, QTreeView, QVBoxLayout)
 from src.ui.file_browser import FileSearchThread, SourceTreeModel, source_key
 
 class SourcePanel(QFrame):
@@ -20,23 +20,19 @@ class SourcePanel(QFrame):
         self._search_threads: list[FileSearchThread] = []
         self._search_token = 0
         self._closing = False
+        self._selection_origin = "explorer"
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 14, 12, 12)
-        self.heading = QLabel("파일")
+        self.heading = QLabel("폴더")
         self.heading.setObjectName("sectionTitle")
         layout.addWidget(self.heading)
-        self.tabs = QTabWidget()
-        layout.addWidget(self.tabs, 1)
-        explorer = QFrame()
-        inner = QVBoxLayout(explorer)
-        inner.setContentsMargins(0, 10, 0, 0)
         self.search = QLineEdit()
         self.search.setPlaceholderText("PPT 검색")
         self.search.setAccessibleName("최상위 폴더 아래의 PPT 파일명 검색")
         self.search.setClearButtonEnabled(True)
-        inner.addWidget(self.search)
+        layout.addWidget(self.search)
         self.stack = QStackedWidget()
-        inner.addWidget(self.stack, 1)
+        layout.addWidget(self.stack, 1)
         self.file_model = QFileSystemModel(self)
         self.file_model.setReadOnly(True)
         self.file_model.setOption(QFileSystemModel.Option.DontUseCustomDirectoryIcons)
@@ -65,18 +61,31 @@ class SourcePanel(QFrame):
         self.search_status.setObjectName("mutedText")
         self.search_status.setWordWrap(True)
         self.search_status.hide()
-        inner.addWidget(self.search_status)
-        self.tabs.addTab(explorer, "폴더")
+        layout.addWidget(self.search_status)
+        self.originals_panel = QFrame()
+        self.originals_panel.setObjectName("originalsPanel")
+        originals_layout = QVBoxLayout(self.originals_panel)
+        originals_layout.setContentsMargins(12, 14, 12, 12)
+        originals_heading = QHBoxLayout()
+        self.originals_heading = QLabel("원본")
+        self.originals_heading.setObjectName("sectionTitle")
+        originals_heading.addWidget(self.originals_heading)
+        originals_heading.addStretch()
+        self.source_count = QLabel("0개")
+        self.source_count.setObjectName("mutedText")
+        originals_heading.addWidget(self.source_count)
+        originals_layout.addLayout(originals_heading)
         self.list = QListWidget()
         self.list.setObjectName("sourceList")
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.list.setSpacing(4)
         self.list.setWordWrap(True)
-        self.tabs.addTab(self.list, "원본 (0)")
+        originals_layout.addWidget(self.list, 1)
         self.list.setToolTip("읽은 원본 · 파일 끌어 놓기로 추가 · Ctrl·Shift로 여러 파일 선택")
         self.list.currentItemChanged.connect(self._current_changed)
         self.list.itemSelectionChanged.connect(self.selection_changed.emit)
-        self.tabs.currentChanged.connect(self._tab_changed)
+        self.list.itemClicked.connect(self._original_clicked)
+        self.list.installEventFilter(self)
         self.tree.selectionModel().selectionChanged.connect(lambda selected, deselected: self.selection_changed.emit())
         self.tree.clicked.connect(self._tree_clicked)
         self.tree.installEventFilter(self)
@@ -107,7 +116,7 @@ class SourcePanel(QFrame):
         self.tree.setCurrentIndex(self.tree_model.index(-1, 0))
         index = self.file_model.setRootPath(str(root))
         self.tree.setRootIndex(self.tree_model.mapFromSource(index))
-        self.tabs.setCurrentIndex(0)
+        self._selection_origin = "explorer"
         self.root_changed.emit(str(root))
         self.selection_changed.emit()
         return True
@@ -116,6 +125,9 @@ class SourcePanel(QFrame):
         return self.file_model.filePath(self.tree_model.mapToSource(index)) if index.isValid() else ""
 
     def eventFilter(self, watched, event) -> bool:
+        if event.type() == QEvent.Type.FocusIn:
+            self._selection_origin = "originals" if watched == self.list else "explorer"
+            self.selection_changed.emit()
         # 포커스 복원·모델 갱신의 자동 선택은 파일 추가로 연결하지 않는다.
         # 실제 키 입력은 Qt의 선택 처리를 마친 뒤 선택한 파일만 읽는다.
         navigation = (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_Left, Qt.Key.Key_Right,
@@ -134,6 +146,7 @@ class SourcePanel(QFrame):
         return super().eventFilter(watched, event)
 
     def _tree_clicked(self, index) -> None:
+        self._selection_origin = "explorer"
         source = self.tree_model.mapToSource(index)
         if not source.isValid():
             return
@@ -143,6 +156,7 @@ class SourcePanel(QFrame):
             self.tree.expand(index)
         else:
             self.file_selected.emit(self.file_model.filePath(source))
+        self.selection_changed.emit()
 
     def _directory_loaded(self, path: str) -> None:
         index = self.tree.currentIndex()
@@ -150,14 +164,16 @@ class SourcePanel(QFrame):
             self.tree.expand(index)
 
     def _result_clicked(self, item) -> None:
-        if item and self.tabs.currentIndex() == 0 and self.stack.currentWidget() == self.results:
+        self._selection_origin = "explorer"
+        if item and self.stack.currentWidget() == self.results:
             self.file_selected.emit(item.data(Qt.ItemDataRole.UserRole))
+        self.selection_changed.emit()
 
     def _current_changed(self, current, previous) -> None:
-        if self.tabs.currentIndex() == 1:
-            self.current_source_changed.emit(current.data(Qt.ItemDataRole.UserRole) if current else "")
+        self.current_source_changed.emit(current.data(Qt.ItemDataRole.UserRole) if current else "")
 
-    def _tab_changed(self, index) -> None:
+    def _original_clicked(self, item) -> None:
+        self._selection_origin = "originals"
         self.current_source_changed.emit(self.current_key())
         self.selection_changed.emit()
 
@@ -167,7 +183,7 @@ class SourcePanel(QFrame):
         self._items[key] = item
         self.list.addItem(item)
         self.set_state(key, path, "읽기 대기")
-        self.tabs.setTabText(1, f"원본 ({len(self._items)})")
+        self.source_count.setText(f"{len(self._items)}개")
 
     def set_state(self, key: str, path: str, status: str, detail: str = "", *, state: str = "queued") -> None:
         self.tree_model.set_state(path, status, detail, state)
@@ -179,31 +195,25 @@ class SourcePanel(QFrame):
             item.setData(Qt.ItemDataRole.AccessibleTextRole, f"{Path(path).name} · {status}")
             item.setToolTip(f"{path}\n{status}" + (f"\n{detail}" if detail else ""))
 
-    def select_source(self, key: str) -> None:
+    def select_source(self, key: str, *, from_browser: bool = False) -> None:
         if key not in self._items:
             return
-        self.list.setCurrentItem(self._items[key])
-        current = self.results.currentItem()
-        if (self.tabs.currentIndex() == 0 and self.stack.currentWidget() == self.results
-                and current and source_key(current.data(Qt.ItemDataRole.UserRole)) == key):
-            self.current_source_changed.emit(key)
-            return
-        if self.stack.currentWidget() == self.results:
-            self.search.clear()
+        with QSignalBlocker(self.list):
+            self.list.setCurrentItem(self._items[key], QItemSelectionModel.SelectionFlag.ClearAndSelect)
+        self._selection_origin = "explorer" if from_browser else "originals"
+        self.current_source_changed.emit(key)
+        self.selection_changed.emit()
+
+    def _restore_tree_selection(self, key: str) -> None:
         path = Path(key)
         if path.is_relative_to(self.root_path):
             index = self.tree_model.mapFromSource(self.file_model.index(str(path)))
             if index.isValid():
-                self.tabs.setCurrentIndex(0)
                 self.tree.setCurrentIndex(index)
                 self.tree.scrollTo(index)
-                self.current_source_changed.emit(key)
-                return
-        self.tabs.setCurrentIndex(1)
-        self.current_source_changed.emit(key)
 
     def selected_keys(self) -> list[str]:
-        if self.tabs.currentIndex() == 1:
+        if self._selection_origin == "originals":
             return [item.data(Qt.ItemDataRole.UserRole) for item in self.list.selectedItems()]
         paths = ([item.data(Qt.ItemDataRole.UserRole) for item in self.results.selectedItems()]
             if self.stack.currentWidget() == self.results else
@@ -211,16 +221,8 @@ class SourcePanel(QFrame):
         return [source_key(path) for path in paths if source_key(path) in self._items]
 
     def current_key(self) -> str:
-        if self.tabs.currentIndex() == 1:
-            item = self.list.currentItem()
-            return item.data(Qt.ItemDataRole.UserRole) if item else ""
-        if self.stack.currentWidget() == self.results:
-            item = self.results.currentItem()
-            path = item.data(Qt.ItemDataRole.UserRole) if item else ""
-        else:
-            path = self._path(self.tree.currentIndex())
-        key = source_key(path) if path else ""
-        return key if key in self._items else ""
+        item = self.list.currentItem()
+        return item.data(Qt.ItemDataRole.UserRole) if item else ""
 
     def remove_sources(self, keys: list[str]) -> None:
         for key in keys:
@@ -229,7 +231,7 @@ class SourcePanel(QFrame):
             self._update_search_item(key)
             if item is not None:
                 self.list.takeItem(self.list.row(item))
-        self.tabs.setTabText(1, f"원본 ({len(self._items)})")
+        self.source_count.setText(f"{len(self._items)}개")
 
     def clear_sources(self) -> None:
         for key in tuple(self._items):
@@ -237,7 +239,7 @@ class SourcePanel(QFrame):
             self._update_search_item(key)
         self._items.clear()
         self.list.clear()
-        self.tabs.setTabText(1, "원본 (0)")
+        self.source_count.setText("0개")
 
     def _cancel_search(self) -> None:
         self._search_token += 1
@@ -245,6 +247,7 @@ class SourcePanel(QFrame):
             thread.requestInterruption()
 
     def _query_changed(self, text: str) -> None:
+        self._selection_origin = "explorer"
         selected = self.current_key() if self.stack.currentWidget() == self.results and not text.strip() else ""
         self._debounce.stop()
         self._cancel_search()
@@ -258,7 +261,7 @@ class SourcePanel(QFrame):
             self.stack.setCurrentWidget(self.tree)
             self.search_status.hide()
             if selected:
-                self.select_source(selected)
+                self._restore_tree_selection(selected)
         self.selection_changed.emit()
 
     def _start_search(self) -> None:

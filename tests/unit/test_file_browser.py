@@ -199,7 +199,7 @@ class MainSidebarTests(unittest.TestCase):
         self.click(self.grandchild)
         wait_until(lambda: self.panel.tree_model.rowCount(self.index(self.grandchild)) == 1)
         self.load(self.deep)
-        self.assertEqual(self.panel.tabs.currentIndex(), 0)
+        self.assertTrue(self.panel.isVisible() and self.panel.originals_panel.isVisible())
         self.assertEqual(self.panel.current_key(), source_key(self.deep))
         self.assertEqual(self.window.slide_grid.model.rowCount(), 3)
         self.assertEqual(self.window.slide_grid.model.slides[0].source_file, str(self.deep))
@@ -212,6 +212,8 @@ class MainSidebarTests(unittest.TestCase):
         self.load(self.a)
         self.assertEqual(len(self.factory.threads), 2)
         self.assertEqual(self.panel.list.count(), 2)
+        self.assertEqual([item.data(Qt.ItemDataRole.UserRole) for item in self.panel.list.selectedItems()],
+                         [source_key(self.a)])
         self.assertIn("3장", self.panel.tree_model.data(self.index(self.a)))
         self.assertEqual(self.window.slide_grid.model.slides[0].source_file, str(self.a))
 
@@ -232,15 +234,15 @@ class MainSidebarTests(unittest.TestCase):
         self.load(self.a)
         self.assertEqual(len(self.factory.threads), 2)
 
-    def test_root_change_keeps_output_and_sources_and_resets_selection(self):
+    def test_root_change_keeps_output_sources_and_original_preview(self):
         self.load(self.a)
         self.window.output_panel.add_slides([self.window.slide_grid.model.slides[0]])
         self.panel.set_root(self.child)
-        self.assertEqual(self.panel.current_key(), "")
+        self.assertEqual(self.panel.current_key(), source_key(self.a))
         self.assertEqual(self.panel.list.count(), 1)
         self.assertEqual(len(self.window.output_panel.output_slides), 1)
         self.panel.select_source(source_key(self.a))
-        self.assertEqual(self.panel.tabs.currentIndex(), 1)
+        self.assertFalse(self.panel.tree.currentIndex().isValid())
         self.assertEqual(self.window.slide_grid.model.rowCount(), 3)
 
     def test_search_nested_file_selects_preview_in_main(self):
@@ -447,21 +449,52 @@ class MainSidebarTests(unittest.TestCase):
             timer.stop()
             self.assertGreater(len(ticks), 0)
 
-    def test_external_drop_remains_available_in_loaded_tab(self):
+    def test_external_drop_remains_available_in_originals_card(self):
         self.panel.set_root(self.child)
         self.window.add_sources([self.a])
         wait_until(lambda: not self.window.is_loading)
-        self.assertEqual(self.panel.tabs.currentIndex(), 1)
+        self.assertTrue(self.panel.originals_panel.isVisible())
         self.assertEqual(self.panel.current_key(), source_key(self.a))
 
-    def test_add_inside_root_during_search_switches_to_tree_preview(self):
+    def test_add_inside_root_during_search_keeps_search_and_selects_original(self):
         self.panel.search.setText("일치하지 않음")
         wait_until(lambda: not self.panel._debounce.isActive() and not self.panel.has_search)
         self.window.add_sources([self.a])
         wait_until(lambda: not self.window.is_loading)
-        self.assertEqual(self.panel.stack.currentWidget(), self.panel.tree)
+        self.assertEqual(self.panel.stack.currentWidget(), self.panel.results)
+        self.assertEqual(self.panel.search.text(), "일치하지 않음")
         self.assertEqual(self.panel.current_key(), source_key(self.a))
         self.assertEqual(self.window.slide_grid.model.slides[0].source_file, str(self.a))
+
+    def test_original_click_preserves_search_and_reuses_loaded_preview(self):
+        self.load(self.a)
+        self.load(self.b)
+        result = self.search("한글", 1)
+        item = self.panel._items[source_key(self.b)]
+        QTest.mouseClick(self.panel.list.viewport(), Qt.MouseButton.LeftButton,
+                         pos=self.panel.list.visualItemRect(item).center())
+        self.assertEqual(self.panel.search.text(), "한글")
+        self.assertEqual(self.panel.stack.currentWidget(), self.panel.results)
+        self.assertEqual(self.panel.results.item(0), result)
+        self.assertEqual(self.panel.selected_keys(), [source_key(self.b)])
+        self.assertEqual(self.window.slide_grid.model.slides[0].source_file, str(self.b))
+        self.assertEqual(len(self.factory.threads), 2)
+
+    def test_originals_ctrl_selection_removes_only_selected_loaded_sources(self):
+        self.load(self.a)
+        self.load(self.b)
+        self.search("한글", 1)
+        for path, modifier in ((self.a, Qt.KeyboardModifier.NoModifier),
+                               (self.b, Qt.KeyboardModifier.ControlModifier)):
+            item = self.panel._items[source_key(path)]
+            QTest.mouseClick(self.panel.list.viewport(), Qt.MouseButton.LeftButton, modifier,
+                             pos=self.panel.list.visualItemRect(item).center())
+        self.assertEqual(set(self.panel.selected_keys()), {source_key(self.a), source_key(self.b)})
+        self.window.remove_selected()
+        self.assertEqual(self.panel.list.count(), 0)
+        self.assertEqual(self.panel.source_count.text(), "0개")
+        self.assertEqual(self.panel.search.text(), "한글")
+        self.assertTrue(self.a.is_file() and self.b.is_file())
 
     def test_icon_toolbar_has_accessible_root_picker_and_shortcut(self):
         toolbar = self.window.findChild(QToolButton)
