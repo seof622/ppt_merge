@@ -10,13 +10,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEventLoop, QItemSelectionModel, QTimer
+from PySide6.QtCore import QEventLoop, QTimer, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QDialog
+from PySide6.QtWidgets import QApplication
 
 from src.main import configure_application
 from src.ppt.thumbnail_service import ThumbnailService
-from src.ui.file_browser import FileBrowserDialog
 from src.ui.main_window import MainWindow
 
 
@@ -55,7 +54,24 @@ def main() -> None:
     window = MainWindow(ROOT / "cache", lambda: ThumbnailService(ROOT / "cache", backend_factory=no_com))
     window.show()
     paths = [ROOT / "tests/fixtures/basic/A.pptx", ROOT / "tests/fixtures/basic/B.pptx"]
-    window.add_sources(paths)
+    panel = window.source_panel
+    panel.set_root(ROOT / "tests/fixtures")
+    wait_until(lambda: panel.tree_model.rowCount(panel.tree.rootIndex()) >= 2)
+    basic_path = ROOT / "tests/fixtures/basic"
+    def index(path):
+        return panel.tree_model.mapFromSource(panel.file_model.index(str(path)))
+    def click(path):
+        panel.tree.scrollTo(index(path))
+        QTest.qWait(50)
+        QTest.mouseClick(panel.tree.viewport(), Qt.MouseButton.LeftButton,
+                         pos=panel.tree.visualRect(index(path)).center())
+    click(basic_path)
+    wait_until(lambda: panel.tree_model.rowCount(index(basic_path)) >= 3)
+    assert panel.tree.isExpanded(index(basic_path))
+    click(paths[0])
+    wait_until(lambda: not window.is_loading)
+    assert window.slide_grid.model.rowCount() == 4
+    click(paths[1])
     wait_until(lambda: not window.is_loading)
     assert all(state.result and state.result.cache_hit for state in window._sources.values())
     first, second = [state.result.presentation for state in window._sources.values()]
@@ -69,43 +85,21 @@ def main() -> None:
         report["captures"].append(filename)
         assert window.output_panel.view.width() > 0
         assert window.generate_button.isVisible()
-    browser = FileBrowserDialog(window, initial_root=ROOT / "tests/fixtures")
-    browser.show()
-    wait_until(lambda: browser.model.rowCount(browser.tree.rootIndex()) > 0)
-    basic = browser.model.index(str(ROOT / "tests/fixtures/basic"))
-    browser.tree.expand(basic)
-    wait_until(lambda: browser.model.rowCount(basic) >= 3)
-    browser.tree.selectionModel().select(browser.model.index(str(paths[0])),
-                                         QItemSelectionModel.SelectionFlag.Select |
-                                         QItemSelectionModel.SelectionFlag.Rows)
-    assert browser.add_button.isEnabled()
+    assert app.activeModalWidget() is None
+    assert panel.tabs.currentIndex() == 0
+    panel.search.setText("advanced")
+    wait_until(lambda: not panel._debounce.isActive() and not panel.has_search)
+    assert panel.results.count() >= 2
     QTest.qWait(100)
-    assert browser.grab().save(str(directory / "browser_tree.png"))
-    browser.search.setText("advanced")
-    wait_until(lambda: not browser._debounce.isActive() and not browser._threads)
-    assert browser.results.count() >= 2
-    QTest.qWait(100)
-    assert browser.grab().save(str(directory / "browser_search.png"))
-    report["search_matches"] = browser.results.count()
-    browser.reject()
-    wait_until(lambda: not browser._threads)
-    browser.deleteLater()
-    # 실제 모달 실행과 선택 결과 전달도 확인한다.
-    selected = FileBrowserDialog(window, initial_root=paths[0].parent)
-    def accept_file():
-        index = selected.model.index(str(paths[0]))
-        if not index.isValid():
-            QTimer.singleShot(10, accept_file)
-            return
-        selected.tree.setCurrentIndex(index)
-        selected.add_button.click()
-    QTimer.singleShot(100, accept_file)
-    assert selected.exec() == QDialog.DialogCode.Accepted
-    assert len(selected.selected_files) == 1
-    selected.deleteLater()
+    assert window.grab().save(str(directory / "main_search.png"))
+    report["search_matches"] = panel.results.count()
+    panel.search.clear()
+    assert panel.stack.currentWidget() == panel.tree
     window.close()
+    wait_until(lambda: not panel.has_search and not window.is_busy)
     app.processEvents()
-    report["modal_selection"] = True
+    report["main_sidebar_selection"] = True
+    report["no_navigation_dialog"] = True
     report["qt_platform"] = app.platformName()
     report["passed"] = True
     (directory / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf8")

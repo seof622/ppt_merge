@@ -2,11 +2,11 @@
 
 2026-10-09, PyInstaller 6.22.3 · hooks 2026.8로 Windows x64 EXE를 생성했다.
 
-최종 파일: dist/PPTMerge.exe, 54631479 bytes (약 52.1 MiB). SHA-256: da09e6fefd02ddcdc6034b4bb3258a33e90c3b3f4bcf93d9203bee644b2d8c39
+최신 파일: dist/main-ui/PPTMerge.exe, 54631029 bytes (약 52.1 MiB). SHA-256: 225e3799935a96c1470706d24f89906433d32052bc7329bdd220792a8295e200
 
 ## 사용
 
-dist/PPTMerge.exe를 더블클릭한다. EXE 파일 하나를 다른 폴더에 복사해도 실행할 수 있도록 Python 3.12·PySide6·Pillow·pywin32 런타임을 포함했다. Microsoft PowerPoint는 실행 PC에 별도로 설치되어 있어야 한다. 설치 프로그램이나 관리자 권한은 요구하지 않는다.
+최신 폴더 탐색 화면은 dist/main-ui/PPTMerge.exe를 더블클릭한다. 기존 dist/PPTMerge.exe는 실행 중이라 교체하지 않고 별도 폴더에 빌드했다. EXE 파일 하나를 다른 폴더에 복사해도 실행할 수 있도록 Python 3.12·PySide6·Pillow·pywin32 런타임을 포함했다. Microsoft PowerPoint는 실행 PC에 별도로 설치되어 있어야 한다. 설치 프로그램이나 관리자 권한은 요구하지 않는다.
 
 EXE 실행 시 데이터는 다음 경로에 쓴다.
 
@@ -26,13 +26,15 @@ EXE 실행 시 데이터는 다음 경로에 쓴다.
 .\.venv\Scripts\python.exe -X utf8 scripts\build_exe.py
 ```
 
+실행 중인 EXE와 별도로 빌드하려면 `scripts/build_exe.py --dist-dir dist/main-ui`를 사용한다. 다른 경로의 EXE 검증은 `scripts/validate_exe.py --exe dist/main-ui/PPTMerge.exe`로 수행한다.
+
 빌드 설정은 packaging/PPTMerge.spec이며 결과는 dist/PPTMerge.exe, 중간 파일은 build/windows에 생성한다. 콘솔 없는 onefile 형태이며 Python·Qt·COM 모듈만 분석해서 포함한다. 기존 개인 파일·캐시·로그·테스트 PPT는 묶지 않는다. 배포 바이너리는 Git에서 제외한다.
 
 빌드용 PATH를 Windows·빌드 Python 경로로 제한한다. 처음 빌드에서는 외부 Poppler 경로의 icuuc.dll이 수집되어 QtCore 시작이 실패했다. 의존 DLL의 실제 함수 목록 비교로 혼입을 확인했고, 제한된 빌드 환경에서 Windows 시스템 DLL을 사용하도록 수정했다. 수정 후 EXE 실행 검증을 통과했다.
 
 ## 검증
 
-- 단위 테스트 115개 통과 (기존 98개와 파일 탐색·검색·UI 검증 17개), 18.907초.
+- 단위 테스트 118개 통과 (기존 98개와 파일 검색·메인 UI 탐색 검증 20개), 18.960초.
 - EXE를 ‘한글 배포 폴더’에 단독 복사하고 별도의 작업 폴더에서 실행.
 - PATH를 Windows/System32·Windows만 남기고 PYTHONPATH·PYTHONHOME·VIRTUAL_ENV를 제거한 환경에서 실행.
 - 실제 frozen EXE에서 Qt 워커로 A·B PPT 8장 썸네일을 새로 생성하고 사용자 데이터 경로에 캐시 저장.
@@ -41,7 +43,7 @@ EXE 실행 시 데이터는 다음 경로에 쓴다.
 - 40장 생성 중 창 닫기: 취소 안내 유지, 미완성 결과 없음, 남은 POWERPNT.EXE 없음.
 - EXE 종료 코드 0, 19개 진단 조건 통과.
 
-2026-10-09 UI 간소화·파일 탐색 변경을 반영해 EXE를 재빌드했다. 최신 실제 Windows 실행 검증은 output/package_validation_mi8uw71_/report.json에서 19개 조건 통과, 종료 코드 0, 23.972초로 확인했다. 새 파일 탐색 화면의 소스 UI 기능·화면 검증은 [UI·파일 탐색 변경](compact_ui_file_browser.md)을 참고한다. 아래 두 보고서는 이전 빌드의 검증 기록이다.
+2026-10-09 메인 UI의 왼쪽 사이드바에서 폴더와 PPT를 탐색하는 변경을 반영해 dist/main-ui/PPTMerge.exe를 빌드했다. 최상위 폴더 지정 단계에서만 폴더 선택 창을 열고 이후 폴더 펼치기·PPT 선택·검색은 메인 화면에서 처리한다. 실제 Windows 실행 검증은 output/package_validation_mfgc_h4x/report.json에서 19개 조건 통과, 종료 코드 0, 23.797초로 확인했다. 남은 PowerPoint 프로세스는 없었다. 새 메인 UI 기능·화면 검증은 [UI·파일 탐색 변경](compact_ui_file_browser.md)을 참고한다. 아래 두 보고서는 이전 빌드의 검증 기록이다.
 
 화면 없는 Qt 검증 결과: output/package_validation_ug_jrtd5/report.json (21.019초).
 실제 Windows 창 검증 결과: output/package_validation_g1cn_2x8/report.json (21.033초, qt_platform=windows, 19개 조건 통과, 종료 코드 0).

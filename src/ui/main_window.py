@@ -11,12 +11,11 @@ from uuid import uuid4
 from PySide6.QtCore import QThread, QTimer, QSize, Qt, QUrl, Slot
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (QFileDialog, QLabel, QMainWindow, QProgressBar, QPushButton,
-                               QSplitter, QToolBar, QVBoxLayout, QMessageBox, QWidget)
+                               QSizePolicy, QSplitter, QToolBar, QVBoxLayout, QMessageBox, QWidget)
 
 from src.ppt.thumbnail_service import ThumbnailProgress, ThumbnailResult, ThumbnailService
 from src.ui.slide_grid import ElidedLabel, SlideGrid
 from src.ui.source_panel import SourcePanel
-from src.ui.file_browser import FileBrowserDialog
 from src.ui.icons import icon
 from src.ui.output_panel import OutputPanel
 from src.workers.ppt_worker import PptWorker, GenerationWorker
@@ -65,10 +64,15 @@ class MainWindow(QMainWindow):
         toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         toolbar.setIconSize(QSize(20, 20))
         self.addToolBar(toolbar)
-        self.add_action = QAction("PPT 추가", self)
+        self.add_action = QAction("최상위 폴더 선택", self)
         self.add_action.setShortcut(QKeySequence.StandardKey.Open)
         self.add_action.triggered.connect(self.choose_files)
         toolbar.addAction(self.add_action)
+        self.root_label = ElidedLabel("")
+        self.root_label.setFixedWidth(360)
+        self.root_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        self.root_label.setAccessibleName("최상위 폴더 경로")
+        toolbar.addWidget(self.root_label)
         toolbar.addSeparator()
         self.remove_action = QAction("선택 파일 제거", self)
         self.remove_action.triggered.connect(self.remove_selected)
@@ -85,7 +89,7 @@ class MainWindow(QMainWindow):
         self.help_action = QAction("사용 안내", self)
         self.help_action.triggered.connect(self._show_help)
         toolbar.addAction(self.help_action)
-        for action, name in ((self.add_action, "add-file"), (self.remove_action, "remove"),
+        for action, name in ((self.add_action, "folder"), (self.remove_action, "remove"),
                              (self.clear_action, "clear"), (self.reload_action, "reload"),
                              (self.help_action, "help")):
             action.setIcon(icon(name))
@@ -93,7 +97,7 @@ class MainWindow(QMainWindow):
             action.setToolTip(action.text() + (f" ({shortcut})" if shortcut else ""))
             toolbar.widgetForAction(action).setAccessibleName(action.text())
         toolbar.widgetForAction(self.add_action).setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.add_action.setIconText("추가")
+        self.add_action.setIconText("폴더")
 
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -134,6 +138,10 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(container)
         self.source_panel.current_source_changed.connect(self._show_source)
         self.source_panel.selection_changed.connect(self._update_actions)
+        self.source_panel.file_selected.connect(self._select_sidebar_file)
+        self.source_panel.root_changed.connect(self._root_changed)
+        self.source_panel.search_finished.connect(self._sidebar_search_finished)
+        self._root_changed(str(self.source_panel.root_path))
 
         status = self.statusBar()
         status.setSizeGripEnabled(True)
@@ -340,18 +348,33 @@ class MainWindow(QMainWindow):
     def choose_files(self) -> None:
         if self._closing or self.is_generating:
             return
-        initial_root = self._browser_root if self._browser_root and self._browser_root.is_dir() else None
-        browser = FileBrowserDialog(self, initial_root=initial_root)
-        try:
-            if browser.exec() == FileBrowserDialog.DialogCode.Accepted:
-                self.add_sources(browser.selected_files)
-            self._browser_root = browser.root_path
-        finally:
-            browser.deleteLater()
+        directory = QFileDialog.getExistingDirectory(
+            self, "최상위 폴더 선택", str(self.source_panel.root_path))
+        if directory:
+            self.source_panel.set_root(directory)
+
+    def _root_changed(self, path: str) -> None:
+        self._browser_root = Path(path)
+        self.root_label.setText(path)
+        self.root_label.setToolTip(path)
+
+    def _select_sidebar_file(self, path: str) -> None:
+        if self._closing or self.is_generating:
+            return
+        key = os.path.normcase(str(Path(path).resolve()))
+        self.add_sources([path])
+        if key in self._sources:
+            self._show_source(key)
+            self._update_actions()
+
+    def _sidebar_search_finished(self) -> None:
+        if self._closing and not self.is_busy:
+            QTimer.singleShot(0, self.close)
 
     def _show_help(self) -> None:
         QMessageBox.information(
-            self, "사용 안내", "원본 추가: 추가 버튼 · Ctrl+O · 파일 끌어 놓기\n"
+            self, "사용 안내", "최상위 폴더: 좌상단 폴더 버튼 · Ctrl+O\n"
+            "원본 선택: 왼쪽 폴더 펼치기 · PPT 클릭 · 파일 끌어 놓기\n"
             "슬라이드 담기: + 버튼 · 더블클릭 · 출력 영역에 끌어 놓기\n"
             "여러 항목 선택: Ctrl·Shift\n"
             "출력 편집: 드래그로 순서 변경 · Delete 삭제 · Ctrl+D 복제\n\n"
@@ -542,6 +565,7 @@ class MainWindow(QMainWindow):
         self.generate_button.setEnabled(bool(self.output_panel.output_slides) and available)
         self.output_panel.setEnabled(not self.is_generating and not self._closing)
         self.slide_grid.setEnabled(not self.is_generating and not self._closing)
+        self.source_panel.setEnabled(not self.is_generating and not self._closing)
 
     def remove_selected(self) -> None:
         if self.is_busy or self._closing:
@@ -593,11 +617,12 @@ class MainWindow(QMainWindow):
         event.acceptProposedAction()
 
     def closeEvent(self, event) -> None:
-        if self.is_busy:
+        self.source_panel.shutdown_search()
+        if self.is_busy or self.source_panel.has_search:
             self._closing = True
             self.cancel_loading()
             self._update_actions()
-            self.status_text.setText("PowerPoint 작업을 정리한 뒤 창을 닫습니다…")
+            self.status_text.setText("진행 중인 작업을 정리한 뒤 창을 닫습니다…")
             event.ignore()
         else:
             event.accept()

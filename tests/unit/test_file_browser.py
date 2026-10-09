@@ -1,4 +1,4 @@
-"""실제 파일 트리·하위 폴더 검색·선택·취소와 기존 추가 흐름을 검증한다."""
+"""메인 UI의 폴더 트리·PPT 선택·검색·취소와 기존 추가 흐름을 검증한다."""
 
 import os
 from pathlib import Path
@@ -12,9 +12,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEventLoop, QItemSelectionModel, QTimer, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QDialog, QToolButton
+from PySide6.QtWidgets import QToolButton
 
-from src.ui.file_browser import FileBrowserDialog
+from src.ui.file_browser import source_key
 from src.utils.file_search import SearchSummary, search_presentations
 import test_ui as ui
 
@@ -107,195 +107,199 @@ class FileSearchTests(unittest.TestCase):
         self.assertEqual(summary.matches, 1)
 
 
-class FileBrowserTests(unittest.TestCase):
+class MainSidebarTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         ui.UiTests.setUpClass()
         cls.app = ui.UiTests.app
 
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name)
-        self.a = self.root / "한글 자료.pptx"
-        self.b = self.root / "Other.PPTM"
-        self.a.write_bytes(b"fake")
-        self.b.write_bytes(b"fake")
-        (self.root / "숨길 자료.txt").write_text("fixture")
+        ui.UiTests.setUp(self)
+        self.panel = self.window.source_panel
         self.child = self.root / "하위 폴더"
         self.child.mkdir()
-        self.nested = self.child / "한글 자료_최종.pptx"
+        self.grandchild = self.child / "세부 자료"
+        self.grandchild.mkdir()
+        self.nested = self.child / "최종.pptx"
+        self.deep = self.grandchild / "깊은 자료.PPTM"
         self.nested.write_bytes(b"fake")
-        self.dialog = FileBrowserDialog(initial_root=self.root)
-        self.dialog.show()
-        wait_until(lambda: self.dialog.model.rowCount(self.dialog.tree.rootIndex()) >= 3)
+        self.deep.write_bytes(b"fake")
+        (self.root / "숨김.txt").write_text("fixture")
+        (self.root / "~$잠금.pptx").write_bytes(b"fake")
+        self.panel.set_root(self.root)
+        wait_until(lambda: self.panel.tree_model.rowCount(self.panel.tree.rootIndex()) == 3)
 
     def tearDown(self):
-        self.dialog.reject()
-        wait_until(lambda: not self.dialog._threads)
-        self.dialog.deleteLater()
+        self.window.close()
+        wait_until(lambda: not self.window.is_busy and not self.panel.has_search)
         self.app.processEvents()
         self.temporary.cleanup()
 
-    def search(self, text):
-        self.dialog.search.setText(text)
-        wait_until(lambda: not self.dialog._debounce.isActive() and not self.dialog._threads)
+    def index(self, path):
+        return self.panel.tree_model.mapFromSource(self.panel.file_model.index(str(path)))
 
-    def test_tree_filters_files_but_keeps_folders_and_accepts_multi_selection(self):
-        parent = self.dialog.tree.rootIndex()
-        names = {self.dialog.model.fileName(self.dialog.model.index(row, 0, parent))
-                 for row in range(self.dialog.model.rowCount(parent))}
-        self.assertEqual(names, {self.a.name, self.b.name, self.child.name})
-        selection = self.dialog.tree.selectionModel()
-        for path in (self.a, self.b):
-            index = self.dialog.model.index(str(path))
-            selection.select(index, QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows)
-        self.assertTrue(self.dialog.add_button.isEnabled())
-        self.dialog.add_button.click()
-        self.assertEqual(set(self.dialog.selected_files), {str(self.a).replace("\\", "/"),
-                                                          str(self.b).replace("\\", "/")})
-        self.assertEqual(self.dialog.result(), QDialog.DialogCode.Accepted)
+    def click(self, path):
+        index = self.index(path)
+        self.assertTrue(index.isValid())
+        self.panel.tree.scrollTo(index)
+        QTest.qWait(20)
+        rect = self.panel.tree.visualRect(self.index(path))
+        self.assertTrue(rect.isValid())
+        QTest.mouseClick(self.panel.tree.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
 
-    def test_folder_selection_cannot_be_added(self):
-        self.dialog.tree.setCurrentIndex(self.dialog.model.index(str(self.child)))
-        self.assertFalse(self.dialog.add_button.isEnabled())
-        self.dialog._tree_double_clicked(self.dialog.tree.currentIndex())
-        self.assertTrue(self.dialog.isVisible())
-
-    def test_default_root_uses_windows_desktop_location(self):
-        with patch("src.ui.file_browser.QStandardPaths.writableLocation", return_value=str(self.root)):
-            browser = FileBrowserDialog()
-        self.assertEqual(browser.root_path, self.root)
-        self.assertEqual(browser.location.currentText(), "바탕화면")
-        browser.reject()
-        browser.deleteLater()
-
-    def test_search_nested_files_multi_select_and_accept(self):
-        self.search("한글")
-        self.assertEqual(self.dialog.results.count(), 2)
-        self.assertEqual(self.dialog.stack.currentWidget(), self.dialog.results)
-        for row in range(self.dialog.results.count()):
-            item = self.dialog.results.item(row)
-            self.assertIn("한글", item.text())
-            item.setSelected(True)
-        self.dialog.add_button.click()
-        self.assertEqual(set(self.dialog.selected_files), {str(self.a), str(self.nested)})
-        self.assertEqual(self.dialog.result(), QDialog.DialogCode.Accepted)
-
-    def test_clear_search_returns_to_tree_and_ignores_stale_batches(self):
-        self.search("한글")
-        token = self.dialog._token
-        self.dialog.search.clear()
-        self.dialog._on_batch(token, (str(self.a),))
-        self.dialog._on_completed(token, SearchSummary(matches=100))
-        self.assertEqual(self.dialog.results.count(), 0)
-        self.assertEqual(self.dialog.stack.currentWidget(), self.dialog.tree)
-        self.assertEqual(self.dialog.status.toolTip(), "PPTX · PPTM")
-        self.assertFalse(self.dialog.add_button.isEnabled())
-
-    def test_changed_root_keeps_query_and_limits_scope(self):
-        self.search("한글")
-        self.dialog.set_root(self.child)
-        wait_until(lambda: not self.dialog._debounce.isActive() and not self.dialog._threads)
-        self.assertEqual(self.dialog.results.count(), 1)
-        self.assertEqual(self.dialog.results.item(0).data(Qt.ItemDataRole.UserRole), str(self.nested))
-        self.assertEqual(self.dialog.root_path, self.child)
-        self.assertEqual(self.dialog.path_label.toolTip(), str(self.child))
-
-    def test_deleted_search_result_cannot_be_accepted(self):
-        self.search("Other")
-        self.dialog.results.item(0).setSelected(True)
-        self.b.unlink()
-        self.dialog.add_button.click()
-        self.assertTrue(self.dialog.isVisible())
-        self.assertEqual(self.dialog.selected_files, [])
-        self.assertIn("삭제", self.dialog.status.toolTip())
-
-    def test_search_runs_off_gui_thread_and_close_waits_responsively(self):
-        started = threading.Event()
-        threads = []
-        def slow_search(root, query, on_batch, cancel):
-            threads.append(threading.get_ident())
-            started.set()
-            time.sleep(0.08)
-            while not cancel():
-                time.sleep(0.01)
-            return SearchSummary(cancelled=True)
-        with patch("src.ui.file_browser.search_presentations", side_effect=slow_search):
-            self.dialog.search.setText("한글")
-            wait_until(started.is_set)
-            ticks = []
-            timer = QTimer()
-            timer.setInterval(5)
-            timer.timeout.connect(lambda: ticks.append(1))
-            timer.start()
-            self.dialog.close()
-            self.assertTrue(self.dialog.isVisible())
-            wait_until(lambda: not self.dialog.isVisible() and not self.dialog._threads)
-            timer.stop()
-        self.assertTrue(ticks)
-        self.assertNotEqual(threads[0], threading.get_ident())
-        self.assertEqual(self.dialog.result(), QDialog.DialogCode.Rejected)
-
-    def test_search_debounce_and_query_change_cancel_previous_work(self):
-        started = threading.Event()
-        cancelled = threading.Event()
-        actual_search = search_presentations
-        def search(root, query, batch, cancel):
-            if query == "이전":
-                started.set()
-                while not cancel():
-                    time.sleep(0.01)
-                cancelled.set()
-                batch((str(self.b),))
-                return SearchSummary(matches=1, cancelled=True)
-            return actual_search(root, query, batch, cancel)
-        with patch("src.ui.file_browser.search_presentations", side_effect=search):
-            self.dialog.search.setText("이전")
-            wait_until(started.is_set)
-            self.search("한글")
-        self.assertTrue(cancelled.is_set())
-        self.assertEqual(self.dialog.results.count(), 2)
-        self.assertTrue(all("한글" in self.dialog.results.item(i).text() for i in range(2)))
-
-
-class FileBrowserIntegrationTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        ui.UiTests.setUpClass()
-        cls.app = ui.UiTests.app
-
-    setUp = ui.UiTests.setUp
-    tearDown = ui.UiTests.tearDown
-    def load(self, *paths):
-        self.window.add_sources(paths)
+    def load(self, path):
+        self.click(path)
         wait_until(lambda: not self.window.is_loading)
 
-    def test_chooser_adds_files_through_existing_worker_and_remembers_root(self):
-        opened = []
-        def select_files(browser):
-            opened.append(browser)
-            browser.selected_files = [str(self.a), str(self.b)]
-            browser.set_root(self.root)
-            return QDialog.DialogCode.Accepted
-        with patch("src.ui.main_window.FileBrowserDialog.exec", new=select_files):
+    def test_root_children_include_folders_and_only_supported_files(self):
+        model = self.panel.tree_model
+        root = self.panel.tree.rootIndex()
+        names = {Path(self.panel._path(model.index(row, 0, root))).name for row in range(model.rowCount(root))}
+        self.assertEqual(names, {self.child.name, self.a.name, self.b.name})
+        self.assertEqual(self.window.root_label.toolTip(), str(self.root))
+        self.assertEqual(len(self.window._sources), 0)
+
+    def test_only_root_picker_opens_a_dialog(self):
+        with patch("src.ui.main_window.QFileDialog.getExistingDirectory", return_value=str(self.child)) as picker:
+            self.window.add_action.trigger()
+            self.assertEqual(self.panel.root_path, self.child)
+            wait_until(lambda: self.panel.tree_model.rowCount(self.panel.tree.rootIndex()) == 2)
+            self.click(self.grandchild)
+            wait_until(lambda: self.panel.tree.isExpanded(self.index(self.grandchild)))
+            picker.assert_called_once()
+            self.assertIsNone(self.app.activeModalWidget())
+        self.assertEqual(len(self.window._sources), 0)
+
+    def test_cancel_root_picker_keeps_tree_and_invalid_root_is_rejected(self):
+        with patch("src.ui.main_window.QFileDialog.getExistingDirectory", return_value=""):
             self.window.choose_files()
-            wait_until(lambda: not self.window.is_loading)
-            self.window.choose_files()
-        wait_until(lambda: not self.window.is_loading)
-        self.assertEqual(opened[1].root_path, self.root)
-        self.assertEqual(self.window.source_panel.list.count(), 2)
+        self.assertEqual(self.panel.root_path, self.root)
+        self.assertFalse(self.panel.set_root(self.root / "missing"))
+        self.assertEqual(self.panel.root_path, self.root)
+
+    def test_click_nested_folders_expands_in_main_and_ppt_loads_preview(self):
+        self.click(self.child)
+        wait_until(lambda: self.panel.tree_model.rowCount(self.index(self.child)) == 2)
+        self.assertTrue(self.panel.tree.isExpanded(self.index(self.child)))
+        self.click(self.grandchild)
+        wait_until(lambda: self.panel.tree_model.rowCount(self.index(self.grandchild)) == 1)
+        self.load(self.deep)
+        self.assertEqual(self.panel.tabs.currentIndex(), 0)
+        self.assertEqual(self.panel.current_key(), source_key(self.deep))
+        self.assertEqual(self.window.slide_grid.model.rowCount(), 3)
+        self.assertEqual(self.window.slide_grid.model.slides[0].source_file, str(self.deep))
+        self.assertTrue(all(value != threading.get_ident() for value in self.factory.threads))
+        self.assertIsNone(self.app.activeModalWidget())
+
+    def test_switching_ready_files_reuses_loaded_sources_and_shows_badge(self):
+        self.load(self.a)
+        self.load(self.b)
+        self.load(self.a)
+        self.assertEqual(len(self.factory.threads), 2)
+        self.assertEqual(self.panel.list.count(), 2)
+        self.assertIn("3장", self.panel.tree_model.data(self.index(self.a)))
+        self.assertEqual(self.window.slide_grid.model.slides[0].source_file, str(self.a))
+
+    def test_ctrl_selection_in_tree_preserves_multiple_sources(self):
+        self.load(self.a)
+        self.load(self.b)
+        self.panel.tree.selectionModel().select(self.index(self.a),
+            QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows)
+        self.assertEqual(set(self.panel.selected_keys()), {source_key(self.a), source_key(self.b)})
+        self.window.remove_selected()
+        self.assertEqual(self.panel.list.count(), 0)
+        self.assertTrue(self.a.is_file() and self.b.is_file())
+
+    def test_remove_then_click_same_file_loads_again(self):
+        self.load(self.a)
+        self.window.remove_selected()
+        self.assertNotIn(source_key(self.a), self.window._sources)
+        self.load(self.a)
         self.assertEqual(len(self.factory.threads), 2)
 
-    def test_icon_actions_keep_tooltips_accessibility_and_shortcuts(self):
+    def test_root_change_keeps_output_and_sources_and_resets_selection(self):
         self.load(self.a)
-        self.window.slide_grid.view.setCurrentIndex(self.window.slide_grid.model.index(0, 0))
-        self.window.slide_grid.add_button.click()
-        for button in self.window.output_panel.findChildren(QToolButton):
-            self.assertEqual(button.text(), "")
-            self.assertFalse(button.icon().isNull())
-            self.assertTrue(button.toolTip())
-            self.assertTrue(button.accessibleName())
-        QTest.keyClick(self.window.output_panel.view, Qt.Key.Key_D, Qt.KeyboardModifier.ControlModifier)
-        self.assertEqual(len(self.window.output_panel.output_slides), 2)
-        QTest.keyClick(self.window.output_panel.view, Qt.Key.Key_Delete)
+        self.window.output_panel.add_slides([self.window.slide_grid.model.slides[0]])
+        self.panel.set_root(self.child)
+        self.assertEqual(self.panel.current_key(), "")
+        self.assertEqual(self.panel.list.count(), 1)
         self.assertEqual(len(self.window.output_panel.output_slides), 1)
+        self.panel.select_source(source_key(self.a))
+        self.assertEqual(self.panel.tabs.currentIndex(), 1)
+        self.assertEqual(self.window.slide_grid.model.rowCount(), 3)
+
+    def test_search_nested_file_selects_preview_in_main(self):
+        workers, updates = [], []
+        def search(root, query, batch, cancel):
+            workers.append(threading.get_ident())
+            return search_presentations(root, query, batch, cancel)
+        self.panel.results.model().rowsInserted.connect(
+            lambda *args: updates.append(threading.get_ident()), Qt.ConnectionType.DirectConnection)
+        with patch("src.ui.file_browser.search_presentations", side_effect=search):
+            self.panel.search.setText("최종")
+            self.panel.search.setText("깊은")
+            wait_until(lambda: self.panel.results.count() == 1 and not self.panel.has_search)
+        self.assertTrue(workers and all(value != threading.get_ident() for value in workers))
+        self.assertEqual(updates, [threading.get_ident()])
+        item = self.panel.results.item(0)
+        self.assertEqual(Path(item.data(Qt.ItemDataRole.UserRole)), self.deep)
+        self.assertIn(self.child.name, item.text())
+        self.panel.results.setCurrentItem(item)
+        wait_until(lambda: not self.window.is_loading)
+        self.assertEqual(self.panel.stack.currentWidget(), self.panel.results)
+        self.assertEqual(self.window.slide_grid.model.slides[0].source_file, str(self.deep))
+        self.panel.search.clear()
+        self.assertEqual(self.panel.stack.currentWidget(), self.panel.tree)
+        self.assertEqual(self.panel.results.count(), 0)
+
+    def test_stale_search_results_ignored_after_root_change(self):
+        old = self.panel._search_token
+        self.panel.set_root(self.child)
+        self.panel._search_batch(old, [str(self.a)])
+        self.panel._search_completed(old, SearchSummary(matches=1))
+        self.assertEqual(self.panel.results.count(), 0)
+        self.assertFalse(self.panel.search_status.isVisible())
+
+    def test_search_close_cancels_without_blocking_main_ui(self):
+        started = threading.Event()
+        def slow(root, query, batch, cancel):
+            started.set()
+            while not cancel():
+                time.sleep(0.01)
+            time.sleep(0.06)
+            return SearchSummary(cancelled=True)
+        with patch("src.ui.file_browser.search_presentations", side_effect=slow):
+            self.panel.search.setText("자료")
+            wait_until(started.is_set)
+            self.window.close()
+            self.assertTrue(self.window.isVisible())
+            ticks = []
+            timer = QTimer()
+            timer.timeout.connect(lambda: ticks.append(1))
+            timer.start(10)
+            wait_until(lambda: not self.panel.has_search and not self.window.isVisible())
+            timer.stop()
+            self.assertGreater(len(ticks), 0)
+
+    def test_external_drop_remains_available_in_loaded_tab(self):
+        self.panel.set_root(self.child)
+        self.window.add_sources([self.a])
+        wait_until(lambda: not self.window.is_loading)
+        self.assertEqual(self.panel.tabs.currentIndex(), 1)
+        self.assertEqual(self.panel.current_key(), source_key(self.a))
+
+    def test_add_inside_root_during_search_switches_to_tree_preview(self):
+        self.panel.search.setText("일치하지 않음")
+        wait_until(lambda: not self.panel._debounce.isActive() and not self.panel.has_search)
+        self.window.add_sources([self.a])
+        wait_until(lambda: not self.window.is_loading)
+        self.assertEqual(self.panel.stack.currentWidget(), self.panel.tree)
+        self.assertEqual(self.panel.current_key(), source_key(self.a))
+        self.assertEqual(self.window.slide_grid.model.slides[0].source_file, str(self.a))
+
+    def test_icon_toolbar_has_accessible_root_picker_and_shortcut(self):
+        toolbar = self.window.findChild(QToolButton)
+        self.assertIsNotNone(toolbar)
+        self.assertFalse(self.window.add_action.icon().isNull())
+        self.assertEqual(self.window.add_action.shortcut().toString(), "Ctrl+O")
+        self.assertIn("최상위", self.window.add_action.toolTip())

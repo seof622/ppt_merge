@@ -46,9 +46,12 @@ QPushButton:hover { background: #eff6ff; }
 QPushButton:disabled { color: #94a3b8; border-color: #e2e8f0; }
 QLineEdit, QComboBox { background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px; }
 QLineEdit:focus { border-color: #3b82f6; }
-QTreeView, QListWidget#fileSearchResults { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; outline: none; }
+QTreeView, QListWidget#fileSearchResults { background: #ffffff; border: none; outline: none; }
 QTreeView::item, QListWidget#fileSearchResults::item { padding: 6px; }
 QTreeView::item:selected, QListWidget#fileSearchResults::item:selected { background: #dbeafe; color: #1e40af; }
+QTabWidget::pane { border: none; background: #ffffff; }
+QTabBar::tab { background: #ffffff; color: #64748b; padding: 7px 12px; border-bottom: 2px solid #e2e8f0; }
+QTabBar::tab:selected { color: #1d4ed8; border-bottom: 2px solid #3b82f6; }
 """
 
 
