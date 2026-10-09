@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import QThread, QTimer, Qt, QUrl, Slot
+from PySide6.QtCore import QThread, QTimer, QSize, Qt, QUrl, Slot
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (QFileDialog, QLabel, QMainWindow, QProgressBar, QPushButton,
                                QSplitter, QToolBar, QVBoxLayout, QMessageBox, QWidget)
@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (QFileDialog, QLabel, QMainWindow, QProgressBar, Q
 from src.ppt.thumbnail_service import ThumbnailProgress, ThumbnailResult, ThumbnailService
 from src.ui.slide_grid import ElidedLabel, SlideGrid
 from src.ui.source_panel import SourcePanel
+from src.ui.file_browser import FileBrowserDialog
+from src.ui.icons import icon
 from src.ui.output_panel import OutputPanel
 from src.workers.ppt_worker import PptWorker, GenerationWorker
 from src.ppt.powerpoint_service import (PowerPointService, GenerationPlan, GenerationProgress, GenerationResult)
@@ -55,10 +57,13 @@ class MainWindow(QMainWindow):
         self._allow_mixed_sizes: bool | None = None
         self.last_generation_result: GenerationResult | None = None
         self._last_saved_result: GenerationResult | None = None
+        self._browser_root: Path | None = None
 
         toolbar = QToolBar("파일 작업")
         toolbar.setMovable(False)
         toolbar.setObjectName("mainToolbar")
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        toolbar.setIconSize(QSize(20, 20))
         self.addToolBar(toolbar)
         self.add_action = QAction("PPT 추가", self)
         self.add_action.setShortcut(QKeySequence.StandardKey.Open)
@@ -76,6 +81,19 @@ class MainWindow(QMainWindow):
         self.reload_action.setShortcut(QKeySequence("Ctrl+R"))
         self.reload_action.triggered.connect(self.reload_selected)
         toolbar.addAction(self.reload_action)
+        toolbar.addSeparator()
+        self.help_action = QAction("사용 안내", self)
+        self.help_action.triggered.connect(self._show_help)
+        toolbar.addAction(self.help_action)
+        for action, name in ((self.add_action, "add-file"), (self.remove_action, "remove"),
+                             (self.clear_action, "clear"), (self.reload_action, "reload"),
+                             (self.help_action, "help")):
+            action.setIcon(icon(name))
+            shortcut = action.shortcut().toString()
+            action.setToolTip(action.text() + (f" ({shortcut})" if shortcut else ""))
+            toolbar.widgetForAction(action).setAccessibleName(action.text())
+        toolbar.widgetForAction(self.add_action).setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.add_action.setIconText("추가")
 
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -107,6 +125,7 @@ class MainWindow(QMainWindow):
         composer.setCollapsible(1, False)
         layout.addWidget(composer, 1)
         self.generate_button = QPushButton("PPT 생성…")
+        self.generate_button.setIcon(icon("file"))
         self.generate_button.setMinimumHeight(36)
         self.generate_button.clicked.connect(self.choose_output)
         self.output_panel.footer.addWidget(self.generate_button)
@@ -118,13 +137,14 @@ class MainWindow(QMainWindow):
 
         status = self.statusBar()
         status.setSizeGripEnabled(True)
-        self.status_text = ElidedLabel("PPT 파일을 추가하거나 창에 끌어 놓으세요.")
+        self.status_text = ElidedLabel("PPTX · PPTM")
         status.addWidget(self.status_text, 1)
         self.progress_bar = QProgressBar()
         self.progress_bar.setFixedWidth(200)
         self.progress_bar.hide()
         status.addPermanentWidget(self.progress_bar)
         self.cancel_button = QPushButton("취소")
+        self.cancel_button.setIcon(icon("clear"))
         self.cancel_button.clicked.connect(self.cancel_loading)
         self.cancel_button.hide()
         status.addPermanentWidget(self.cancel_button)
@@ -136,6 +156,12 @@ class MainWindow(QMainWindow):
         self.open_output_button.clicked.connect(self._open_output_folder)
         self.open_output_button.hide()
         status.addPermanentWidget(self.open_output_button)
+        for button, name in ((self.open_file_button, "file"), (self.open_output_button, "folder")):
+            description = button.text()
+            button.setIcon(icon(name))
+            button.setText("")
+            button.setToolTip(description)
+            button.setAccessibleName(description)
         self._update_actions()
 
     @property
@@ -312,9 +338,24 @@ class MainWindow(QMainWindow):
             self._start_pending()
 
     def choose_files(self) -> None:
-        paths, _ = QFileDialog.getOpenFileNames(self, "PowerPoint 파일 추가", "",
-                                               "PowerPoint (*.pptx *.pptm)")
-        self.add_sources(paths)
+        if self._closing or self.is_generating:
+            return
+        initial_root = self._browser_root if self._browser_root and self._browser_root.is_dir() else None
+        browser = FileBrowserDialog(self, initial_root=initial_root)
+        try:
+            if browser.exec() == FileBrowserDialog.DialogCode.Accepted:
+                self.add_sources(browser.selected_files)
+            self._browser_root = browser.root_path
+        finally:
+            browser.deleteLater()
+
+    def _show_help(self) -> None:
+        QMessageBox.information(
+            self, "사용 안내", "원본 추가: 추가 버튼 · Ctrl+O · 파일 끌어 놓기\n"
+            "슬라이드 담기: + 버튼 · 더블클릭 · 출력 영역에 끌어 놓기\n"
+            "여러 항목 선택: Ctrl·Shift\n"
+            "출력 편집: 드래그로 순서 변경 · Delete 삭제 · Ctrl+D 복제\n\n"
+            "PPT 생성으로 저장하세요. 편집 목록은 앱 종료 시 초기화됩니다.")
 
     def add_sources(self, paths: Iterable[str | Path]) -> None:
         if self._closing or self.is_generating:
@@ -478,7 +519,7 @@ class MainWindow(QMainWindow):
     def _show_source(self, key: str) -> None:
         state = self._sources.get(key)
         if state is None:
-            self.slide_grid.show_message("슬라이드 미리보기", "PPT 파일을 추가하면 이곳에 슬라이드가 표시됩니다.")
+            self.slide_grid.show_message("슬라이드", "PPT를 추가하세요")
         elif state.status == "failed":
             self.slide_grid.show_message(Path(state.path).name, state.error + "\n\n문제를 해결한 뒤 ‘다시 읽기’를 누르세요.")
         elif state.result is not None:

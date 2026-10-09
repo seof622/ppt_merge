@@ -4,12 +4,13 @@ from collections import OrderedDict
 
 from PySide6.QtCore import QAbstractListModel, QModelIndex, QSize, Qt, Signal
 from PySide6.QtGui import QIcon, QPixmap
-from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel, QListView, QMenu, QPushButton,
+from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel, QListView, QMenu,
                                QSizePolicy, QStackedWidget, QVBoxLayout, QWidget)
 
 from src.models.presentation_model import PresentationInfo
 from src.models.slide_model import SlideItem
 from src.ui.slide_mime import SLIDE_MIME, make_slide_mime
+from src.ui.icons import icon_button
 
 
 class ElidedLabel(QLabel):
@@ -105,20 +106,16 @@ class SlideGrid(QWidget):
         layout.setContentsMargins(24, 18, 16, 16)
         layout.setSpacing(8)
         header = QHBoxLayout()
-        self.heading = ElidedLabel("슬라이드 미리보기")
+        self.heading = ElidedLabel("슬라이드")
         self.heading.setObjectName("sectionTitle")
         self.count = QLabel("")
         self.count.setObjectName("mutedText")
         header.addWidget(self.heading, 1)
         header.addWidget(self.count)
-        self.add_button = QPushButton("선택 슬라이드 담기")
+        self.add_button = icon_button("add", "선택 슬라이드 담기", self)
         self.add_button.clicked.connect(self.add_selected)
         header.addWidget(self.add_button)
         layout.addLayout(header)
-        self.hint = QLabel("Ctrl·Shift 선택 · 더블클릭 또는 아래 출력 목록에 끌어 놓아 담기")
-        self.hint.setObjectName("mutedText")
-        self.hint.setWordWrap(True)
-        layout.addWidget(self.hint)
         self.stack = QStackedWidget()
         self.empty = QLabel()
         self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -127,6 +124,8 @@ class SlideGrid(QWidget):
         self.stack.addWidget(self.empty)
         self.view = QListView()
         self.view.setObjectName("slideView")
+        self.view.setAccessibleName("원본 슬라이드")
+        self.view.setToolTip("Ctrl·Shift 선택 · 더블클릭 또는 출력 목록에 끌어 놓아 담기")
         self.model = SlideListModel(self.view, drag_token)
         self.view.setModel(self.model)
         self.view.setViewMode(QListView.ViewMode.IconMode)
@@ -149,7 +148,7 @@ class SlideGrid(QWidget):
         self.view.selectionModel().selectionChanged.connect(self._selection_changed)
         self.stack.addWidget(self.view)
         layout.addWidget(self.stack, 1)
-        self.show_message("슬라이드 미리보기", "PPT 파일을 추가하면 이곳에 슬라이드가 표시됩니다.")
+        self.show_message("슬라이드", "PPT를 추가하세요")
 
     def show_message(self, heading: str, message: str) -> None:
         self.model.set_slides(())
@@ -157,7 +156,6 @@ class SlideGrid(QWidget):
         self.heading.setToolTip(heading)
         self.count.setText("")
         self.add_button.setEnabled(False)
-        self.hint.hide()
         self.empty.setText(message)
         self.stack.setCurrentWidget(self.empty)
 
@@ -177,7 +175,6 @@ class SlideGrid(QWidget):
         self.model.set_slides(info.slides)
         self.heading.setText(info.source_file_name)
         self.heading.setToolTip(info.source_file)
-        self.hint.show()
         self._selection_changed()
         if info.slide_count:
             self.stack.setCurrentWidget(self.view)

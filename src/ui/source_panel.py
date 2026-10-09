@@ -16,7 +16,7 @@ class SourcePanel(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 18, 16, 16)
         layout.setSpacing(12)
-        self.heading = QLabel("소스 파일 · 0개")
+        self.heading = QLabel("원본 · 0개")
         self.heading.setObjectName("sectionTitle")
         layout.addWidget(self.heading)
         self.list = QListWidget()
@@ -27,10 +27,7 @@ class SourcePanel(QFrame):
         self.list.currentItemChanged.connect(self._current_changed)
         self.list.itemSelectionChanged.connect(self.selection_changed.emit)
         layout.addWidget(self.list, 1)
-        hint = QLabel("PPTX · PPTM\n파일을 이 창에 끌어 놓아 추가할 수 있습니다.")
-        hint.setWordWrap(True)
-        hint.setObjectName("mutedText")
-        layout.addWidget(hint)
+        self.list.setToolTip("PPTX · PPTM · 파일 끌어 놓기로 추가 · Ctrl·Shift로 여러 파일 선택")
         self._items: dict[str, QListWidgetItem] = {}
 
     def _current_changed(self, current, previous) -> None:
@@ -43,7 +40,7 @@ class SourcePanel(QFrame):
         self._items[key] = item
         self.list.addItem(item)
         self.set_state(key, path, "읽기 대기")
-        self.heading.setText(f"소스 파일 · {len(self._items)}개")
+        self.heading.setText(f"원본 · {len(self._items)}개")
 
     def set_state(self, key: str, path: str, status: str, detail: str = "", *, state: str = "queued") -> None:
         item = self._items.get(key)
@@ -53,8 +50,9 @@ class SourcePanel(QFrame):
                      "failed": QStyle.StandardPixmap.SP_MessageBoxCritical,
                      "cancelled": QStyle.StandardPixmap.SP_DialogCancelButton}
             item.setIcon(self.style().standardIcon(icons.get(state, QStyle.StandardPixmap.SP_FileIcon)))
-            item.setText(f"{Path(path).name}\n{status}")
-            item.setToolTip(path + (f"\n{detail}" if detail else ""))
+            item.setText(Path(path).name + (f"\n{status.split(' · ')[0]}" if state == "ready" else ""))
+            item.setData(Qt.ItemDataRole.AccessibleTextRole, f"{Path(path).name} · {status}")
+            item.setToolTip(f"{path}\n{status}" + (f"\n{detail}" if detail else ""))
 
     def select_source(self, key: str) -> None:
         if key in self._items:
@@ -72,9 +70,9 @@ class SourcePanel(QFrame):
             item = self._items.pop(key, None)
             if item is not None:
                 self.list.takeItem(self.list.row(item))
-        self.heading.setText(f"소스 파일 · {len(self._items)}개")
+        self.heading.setText(f"원본 · {len(self._items)}개")
 
     def clear_sources(self) -> None:
         self._items.clear()
         self.list.clear()
-        self.heading.setText("소스 파일 · 0개")
+        self.heading.setText("원본 · 0개")

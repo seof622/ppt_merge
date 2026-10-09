@@ -2,7 +2,7 @@
 
 2026-10-09, PyInstaller 6.22.3 · hooks 2026.8로 Windows x64 EXE를 생성했다.
 
-최종 파일: dist/PPTMerge.exe, 54564843 bytes (약 52.0 MiB). SHA-256: 5e36ce2811665691e3a5f5ddd72dda1ae1c5a95ba5303b28fb077e05fb0f8869
+최종 파일: dist/PPTMerge.exe, 54631479 bytes (약 52.1 MiB). SHA-256: da09e6fefd02ddcdc6034b4bb3258a33e90c3b3f4bcf93d9203bee644b2d8c39
 
 ## 사용
 
@@ -32,7 +32,7 @@ EXE 실행 시 데이터는 다음 경로에 쓴다.
 
 ## 검증
 
-- 단위 테스트 98개 통과 (기존 95개와 앱 데이터 경로 3개), 9.948초.
+- 단위 테스트 115개 통과 (기존 98개와 파일 탐색·검색·UI 검증 17개), 18.907초.
 - EXE를 ‘한글 배포 폴더’에 단독 복사하고 별도의 작업 폴더에서 실행.
 - PATH를 Windows/System32·Windows만 남기고 PYTHONPATH·PYTHONHOME·VIRTUAL_ENV를 제거한 환경에서 실행.
 - 실제 frozen EXE에서 Qt 워커로 A·B PPT 8장 썸네일을 새로 생성하고 사용자 데이터 경로에 캐시 저장.
@@ -40,6 +40,8 @@ EXE 실행 시 데이터는 다음 경로에 쓴다.
 - 저장 결과의 파일·폴더 열기 버튼 표시와 화면 캡처 확인.
 - 40장 생성 중 창 닫기: 취소 안내 유지, 미완성 결과 없음, 남은 POWERPNT.EXE 없음.
 - EXE 종료 코드 0, 19개 진단 조건 통과.
+
+2026-10-09 UI 간소화·파일 탐색 변경을 반영해 EXE를 재빌드했다. 최신 실제 Windows 실행 검증은 output/package_validation_mi8uw71_/report.json에서 19개 조건 통과, 종료 코드 0, 23.972초로 확인했다. 새 파일 탐색 화면의 소스 UI 기능·화면 검증은 [UI·파일 탐색 변경](compact_ui_file_browser.md)을 참고한다. 아래 두 보고서는 이전 빌드의 검증 기록이다.
 
 화면 없는 Qt 검증 결과: output/package_validation_ug_jrtd5/report.json (21.019초).
 실제 Windows 창 검증 결과: output/package_validation_g1cn_2x8/report.json (21.033초, qt_platform=windows, 19개 조건 통과, 종료 코드 0).
