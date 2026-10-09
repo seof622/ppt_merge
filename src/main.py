@@ -1,6 +1,7 @@
 """PPT Merge 데스크톱 앱 진입점: python -m src.main [PPT 경로 ...]."""
 
 import argparse
+import logging
 from pathlib import Path
 import sys
 
@@ -10,8 +11,9 @@ from PySide6.QtWidgets import QApplication
 
 from src.ui.main_window import MainWindow
 from src.utils.logger import configure_logging
+from src.utils.app_paths import app_data_root
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = app_data_root()
 
 APP_STYLESHEET = """
 QMainWindow, QWidget { color: #1e293b; font-family: '맑은 고딕'; font-size: 14px; }
@@ -59,15 +61,24 @@ def configure_application(app: QApplication) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="PPT 슬라이드를 미리 보고 출력 순서를 편집합니다.")
     parser.add_argument("sources", nargs="*", type=Path)
+    parser.add_argument("--package-check", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     configure_logging(ROOT / "logs")
     app = QApplication(sys.argv[:1])
     configure_application(app)
     window = MainWindow(ROOT / "cache")
     window.show()
-    if args.sources:
+    if args.package_check:
+        from src.utils.package_check import start_package_check
+        start_package_check(app, window, args.package_check, args.sources, ROOT)
+    elif args.sources:
         QTimer.singleShot(0, lambda: window.add_sources(args.sources))
-    return app.exec()
+    logger = logging.getLogger("ppt_merge.app")
+    logger.info("앱 시작 frozen=%s 데이터=%s", getattr(sys, "frozen", False), ROOT)
+    try:
+        return app.exec()
+    finally:
+        logger.info("앱 종료")
 
 
 if __name__ == "__main__":

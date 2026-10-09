@@ -10,11 +10,13 @@
 - pywin32 (`pythoncom` 포함)
 - 설치된 Microsoft PowerPoint
 
-현재 PPT 파일 목록·썸네일 보기·출력 순서 편집과 **새 PPTX 생성**이 구현되어 있습니다. 원본 서식·마스터·레이아웃을 보존하는 PowerPoint COM 방식으로 결합하고 내부 슬라이드 링크를 재연결합니다. Phase 7 UX 다듬기까지 구현했고 단위 테스트 95개를 통과했습니다. Phase 6에서 실제 Office 통합 테스트 22개(신뢰성 5개·생성 9개·썸네일 8개)를 통과했으며, 이번 단계에서도 실제 생성·생성 중 종료 2개와 캐시 출력 UI 1개를 재검증했습니다. UX 변경과 검증 범위는 [UX 검증](docs/ux_validation.md)에 정리했습니다. 합성 자료 20개 파일·500장의 생성은 약 54초, 캐시 재로딩은 약 2.1초였습니다. 측정 범위와 재검증 방법은 [신뢰성 검증](docs/reliability_validation.md)에 정리했습니다. OneDrive 저장·덮어쓰기 검증 2개와 실제 PPT 캐시 UI 회귀 검증 1개도 앞서 통과했습니다. 생성과 검증 결과는 [PPT 생성 안내](docs/generation_validation.md), 기존 단계는 [기본 보존](docs/poc_validation.md), [고급 보존](docs/advanced_validation.md), [썸네일](docs/thumbnail_validation.md), [기본 UI](docs/ui_validation.md), [출력 편집](docs/output_composer_validation.md)을 참고하세요.
+현재 PPT 파일 목록·썸네일 보기·출력 순서 편집과 **새 PPTX 생성**이 구현되어 있습니다. 원본 서식·마스터·레이아웃을 보존하는 PowerPoint COM 방식으로 결합하고 내부 슬라이드 링크를 재연결합니다. Phase 7 UX 다듬기까지 구현했고 단위 테스트 98개를 통과했습니다. Phase 6에서 실제 Office 통합 테스트 22개(신뢰성 5개·생성 9개·썸네일 8개)를 통과했으며, 이번 단계에서도 실제 생성·생성 중 종료 2개와 캐시 출력 UI 1개를 재검증했습니다. UX 변경과 검증 범위는 [UX 검증](docs/ux_validation.md)에 정리했습니다. 합성 자료 20개 파일·500장의 생성은 약 54초, 캐시 재로딩은 약 2.1초였습니다. 측정 범위와 재검증 방법은 [신뢰성 검증](docs/reliability_validation.md)에 정리했습니다. OneDrive 저장·덮어쓰기 검증 2개와 실제 PPT 캐시 UI 회귀 검증 1개도 앞서 통과했습니다. 생성과 검증 결과는 [PPT 생성 안내](docs/generation_validation.md), 기존 단계는 [기본 보존](docs/poc_validation.md), [고급 보존](docs/advanced_validation.md), [썸네일](docs/thumbnail_validation.md), [기본 UI](docs/ui_validation.md), [출력 편집](docs/output_composer_validation.md)을 참고하세요.
 
 ## 앱 실행
 
-이 작업 환경에서는 `run_app.bat`을 탐색기에서 더블클릭하면 됩니다. PPT 추가 버튼 또는 파일 끌어 놓기로 PPTX·PPTM 파일을 추가합니다. 소스를 선택하면 슬라이드 번호·제목·썸네일이 표시되고 Ctrl·Shift로 여러 슬라이드를 선택할 수 있습니다. 파일 제거·파일 목록 비우기·다시 읽기·로딩 취소를 지원합니다.
+Windows 단일 실행 파일은 `dist/PPTMerge.exe`입니다. 더블클릭하면 실행되며 Python 설치와 `run_app.bat`은 필요하지 않습니다. 실행 PC에는 Microsoft PowerPoint가 설치되어 있어야 합니다. EXE의 캐시와 로그는 `%LOCALAPPDATA%/PPTMerge`에 저장합니다. 빌드와 검증 방법은 [EXE 패키징](docs/exe_packaging.md)을 참고하세요.
+
+소스로 개발할 때는 이 작업 환경의 `run_app.bat`을 탐색기에서 더블클릭하면 됩니다. PPT 추가 버튼 또는 파일 끌어 놓기로 PPTX·PPTM 파일을 추가합니다. 소스를 선택하면 슬라이드 번호·제목·썸네일이 표시되고 Ctrl·Shift로 여러 슬라이드를 선택할 수 있습니다. 파일 제거·파일 목록 비우기·다시 읽기·로딩 취소를 지원합니다.
 
 ‘선택 슬라이드 담기’, 더블클릭, 우클릭 메뉴 또는 출력 영역에 드래그해서 슬라이드를 담습니다. 출력 목록은 왼쪽부터 최종 순서이며 중복을 허용합니다. Ctrl·Shift 선택, 드래그 순서 변경, Delete 삭제, 복제(Ctrl+D), 앞으로·뒤로·맨 앞으로·맨 뒤로 이동, 출력 비우기를 지원합니다. 복제는 선택한 슬라이드를 한 번 더 담는 기능입니다. 담은 직후 출력 목록으로 포커스가 이동해 복제·삭제 단축키를 이어서 쓸 수 있고, 편집 결과는 아래 상태 표시줄에 표시됩니다. 파일 목록을 비워도 출력 목록은 유지됩니다. 오른쪽 아래 ‘PPT 생성’을 눌러 저장 경로를 선택하면 출력 목록 순서대로 새 PPTX를 만듭니다. 같은 이름의 기존 파일은 확인 후 덮어쓰며, 원본 파일에는 저장할 수 없습니다. 저장 완료 후 상태 표시줄의 ‘PPT 파일 열기’로 결과 파일을 바로 열거나 ‘저장 폴더 열기’로 결과 폴더를 확인할 수 있습니다. 파일은 Windows에 연결된 앱으로 열며, PowerPoint로 열었다면 다음 생성 전에 PowerPoint를 닫아 주세요. 현재 편집 목록은 앱 종료 시 초기화되고 프로젝트 저장은 아직 지원하지 않습니다.
 
