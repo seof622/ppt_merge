@@ -10,13 +10,13 @@
 - pywin32 (`pythoncom` 포함)
 - 설치된 Microsoft PowerPoint
 
-현재는 PPT 파일 목록·썸네일 보기·출력 슬라이드 순서 편집 UI, 썸네일 캐시 서비스 및 PowerPoint COM 결합 PoC가 구현되어 있습니다. UI에서 새 PPT를 생성하는 연결은 다음 단계입니다. 출력 편집 구현 후 단위 테스트 42개와 실제 PPT 캐시 기반 UI 통합 테스트 1개를 통과했습니다. 기존 단계에서 기본·고급 PPT 보존과 실제 Office UI 통합 테스트 2개도 검증했습니다. 실행 방법과 검증 결과는 [기본 검증 안내](docs/poc_validation.md), [고급 검증 안내](docs/advanced_validation.md), [썸네일 검증 안내](docs/thumbnail_validation.md), [기본 UI 검증 기록](docs/ui_validation.md), [출력 순서 편집 안내](docs/output_composer_validation.md)를 참고하세요.
+현재 PPT 파일 목록·썸네일 보기·출력 순서 편집과 **새 PPTX 생성**이 구현되어 있습니다. 원본 서식·마스터·레이아웃을 보존하는 PowerPoint COM 방식으로 결합하고 내부 슬라이드 링크를 재연결합니다. 단위 테스트 64개, 실제 Office 생성 검증 9개 사례와 OneDrive 저장·덮어쓰기 검증 2개, 실제 PPT 캐시 UI 회귀 검증 1개를 통과했습니다. 생성과 검증 결과는 [PPT 생성 안내](docs/generation_validation.md), 기존 단계는 [기본 보존](docs/poc_validation.md), [고급 보존](docs/advanced_validation.md), [썸네일](docs/thumbnail_validation.md), [기본 UI](docs/ui_validation.md), [출력 편집](docs/output_composer_validation.md)을 참고하세요.
 
 ## 앱 실행
 
 이 작업 환경에서는 `run_app.bat`을 탐색기에서 더블클릭하면 됩니다. PPT 추가 버튼 또는 파일 끌어 놓기로 PPTX·PPTM 파일을 추가합니다. 소스를 선택하면 슬라이드 번호·제목·썸네일이 표시되고 Ctrl·Shift로 여러 슬라이드를 선택할 수 있습니다. 파일 제거·파일 목록 비우기·다시 읽기·로딩 취소를 지원합니다.
 
-‘선택 슬라이드 담기’, 더블클릭, 우클릭 메뉴 또는 출력 영역에 드래그해서 슬라이드를 담습니다. 출력 목록은 왼쪽부터 최종 순서이며 중복을 허용합니다. Ctrl·Shift 선택, 드래그 순서 변경, Delete 삭제, 복제, 앞으로·뒤로·맨 앞으로·맨 뒤로 이동, 출력 비우기를 지원합니다. 파일 목록을 비워도 출력 목록은 유지됩니다. 현재 편집 내용은 앱 종료 시 초기화되며 프로젝트 저장과 새 PPT 생성은 후속 단계입니다.
+‘선택 슬라이드 담기’, 더블클릭, 우클릭 메뉴 또는 출력 영역에 드래그해서 슬라이드를 담습니다. 출력 목록은 왼쪽부터 최종 순서이며 중복을 허용합니다. Ctrl·Shift 선택, 드래그 순서 변경, Delete 삭제, 복제, 앞으로·뒤로·맨 앞으로·맨 뒤로 이동, 출력 비우기를 지원합니다. 파일 목록을 비워도 출력 목록은 유지됩니다. 오른쪽 아래 ‘PPT 생성’을 눌러 저장 경로를 선택하면 출력 목록 순서대로 새 PPTX를 만듭니다. 같은 이름의 기존 파일은 확인 후 덮어쓰며, 원본 파일에는 저장할 수 없습니다. 현재 편집 목록은 앱 종료 시 초기화되고 프로젝트 저장은 아직 지원하지 않습니다.
 
 새 환경에서는 의존성을 설치하고 실행합니다.
 
@@ -26,7 +26,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m src.main
 ```
 
-처음 생성해야 하는 자료는 PowerPoint를 닫은 상태에서 읽습니다. 기존 캐시가 있으면 PowerPoint가 실행 중이어도 미리보기를 사용할 수 있습니다. 작업은 QThread에서 순서대로 처리하며, 창을 닫으면 취소 요청 후 COM·스레드 정리를 마친 뒤 종료합니다. 로그는 `logs/app.log`이고 시작 단계 오류는 `logs/launcher.log`에서 확인합니다.
+처음 생성해야 하는 자료는 PowerPoint를 닫은 상태에서 읽습니다. 기존 캐시가 있으면 PowerPoint가 실행 중이어도 미리보기를 사용할 수 있습니다. 크기가 다른 슬라이드를 섞으면 첫 출력 슬라이드의 크기 사용을 확인합니다. 원본이 변경되면 ‘다시 읽기’ 후 기존 출력 항목을 삭제하고 다시 담아야 합니다. 생성 중에도 취소할 수 있으며, 임시 PPT와 PowerPoint 정리가 끝난 뒤에만 결과 파일을 게시합니다. 내부 링크 대상이 출력 목록에 없으면 생성을 중단하고, 대상이 중복되면 처음 등장하는 항목으로 연결합니다. 작업은 QThread에서 순서대로 처리하며, 창을 닫으면 취소 요청 후 COM·스레드 정리를 마친 뒤 종료합니다. 로그는 `logs/app.log`이고 시작 단계 오류는 `logs/launcher.log`에서 확인합니다.
 
 ## 폴더 구조
 
@@ -48,6 +48,8 @@ ppt_merge/
 │   │   └── slide_item_widget.py
 │   ├── ppt/                    # PowerPoint COM 서비스
 │   │   ├── __init__.py
+│   │   ├── source_validation.py    # 원본 검증·변경 감지
+│   │   ├── internal_links.py       # 내부 링크 재연결
 │   │   ├── powerpoint_service.py
 │   │   ├── presentation_manager.py
 │   │   └── thumbnail_service.py
@@ -85,7 +87,7 @@ ppt_merge/
 3. 보존 검증이 통과하면 `src/ui/`에서 파일 목록·슬라이드 그리드·출력 순서 화면을 구현합니다.
 4. `src/workers/`를 통해 서비스 호출, 진행률, 취소 및 COM 정리를 연결합니다.
 
-UI에서 COM 객체를 직접 조작하지 않습니다. 작업 스레드는 `pythoncom.CoInitialize()` / `CoUninitialize()`를 호출하고, 스레드 간에는 일반 Python 데이터만 전달합니다. 아직 구현하지 않은 모듈의 docstring은 향후 구현할 책임을 설명합니다.
+UI에서 COM 객체를 직접 조작하지 않습니다. 작업 스레드는 `pythoncom.CoInitialize()` / `CoUninitialize()`를 호출하고, 스레드 간에는 일반 Python 데이터만 전달합니다. 생성 준비와 실행은 각 워커에서 수행하며 UI에는 생성 계획·진행률·결과 데이터만 전달합니다.
 
 ## PoC 실행
 

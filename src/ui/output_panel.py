@@ -247,10 +247,12 @@ class OutputPanel(QWidget):
         self.view.customContextMenuRequested.connect(self._context_menu)
         layout.addWidget(self.view, 1)
         hint = QLabel("왼쪽부터 최종 순서 · Ctrl·Shift 선택 · 드래그로 순서 변경\n"
-                      "목록은 앱 종료 시 초기화됩니다. 새 PPT 생성은 다음 단계에서 지원합니다.")
+                      "목록은 앱 종료 시 초기화됩니다. ‘PPT 생성’으로 새 파일을 저장하세요.")
         hint.setObjectName("mutedText")
         hint.setWordWrap(True)
-        layout.addWidget(hint)
+        self.footer = QHBoxLayout()
+        self.footer.addWidget(hint, 1)
+        layout.addLayout(self.footer)
         self._update_actions()
 
     @property

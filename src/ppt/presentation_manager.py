@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import gc
 import logging
 from pathlib import Path
@@ -12,8 +13,9 @@ from typing import Any
 from src.models.presentation_model import PresentationInfo
 from src.models.slide_model import SlideItem
 from src.ppt.errors import (CancelCallback, PowerPointBusyError, PowerPointError,
-                            PresentationOpenError, ThumbnailError, check_cancel)
+                            PresentationOpenError, ThumbnailError, GenerationError, check_cancel)
 from src.utils.process_utils import process_pids
+from src.ppt.internal_links import InternalLinkError, read_internal_links, reconnect_internal_links
 
 LOGGER = logging.getLogger("ppt_merge.powerpoint")
 
@@ -125,6 +127,86 @@ class PresentationManager:
             raise ThumbnailError("슬라이드 미리보기를 만들지 못했습니다. 로그를 확인하세요.") from error
         finally:
             presentation = slide = None
+
+    def compose(self, slides: tuple[SlideItem, ...], target: Path, width: float, height: float,
+                progress: Callable[[str, int, str], None], cancel: CancelCallback | None = None) -> None:
+        """PoC에서 검증한 디자인 보존 방식을 실행하고 COM 참조를 정리한다."""
+        self._assert_thread()
+        source = presentation = destination = design = inserted_slide = None
+        designs = {}
+        links = []
+        mapping = {}
+        try:
+            # 링크 대상 누락은 슬라이드를 복사하기 전에 확인한다.
+            selected = {(str(Path(item.source_file).resolve()), item.slide_id) for item in slides}
+            for number, item in enumerate(slides, 1):
+                check_cancel(cancel)
+                key = str(Path(item.source_file).resolve())
+                presentation = self._open(Path(key))
+                source = presentation.Slides.FindBySlideID(item.slide_id)
+                if int(source.SlideIndex) != item.slide_index:
+                    raise GenerationError("원본 슬라이드 순서가 달라졌습니다. 다시 읽고 담아 주세요.")
+                source_links = read_internal_links(presentation, source)
+                if any((key, target_id) not in selected for _, target_id in source_links):
+                    raise GenerationError(
+                        f"내부 링크 대상 슬라이드가 출력 목록에 없습니다: {item.source_file_name} {item.slide_index}번. "
+                        "링크 대상도 함께 담아 주세요.")
+                links.append((number, key, source_links))
+                mapping.setdefault((key, item.slide_id), []).append(number)
+                source = presentation = None
+            destination = self._app.Presentations.Add(False)
+            destination.PageSetup.SlideWidth = width
+            destination.PageSetup.SlideHeight = height
+            for number, item in enumerate(slides, 1):
+                check_cancel(cancel)
+                key = str(Path(item.source_file).resolve())
+                presentation = self._open(Path(key))
+                source = presentation.Slides.FindBySlideID(item.slide_id)
+                inserted = destination.Slides.InsertFromFile(key, destination.Slides.Count,
+                                                              item.slide_index, item.slide_index)
+                if inserted != 1:
+                    raise GenerationError("슬라이드 삽입 수가 예상과 다릅니다.")
+                inserted_slide = destination.Slides.Item(destination.Slides.Count)
+                design_key = (key, int(source.Design.Index))
+                if design_key not in designs:
+                    designs[design_key] = destination.Designs.Clone(source.Design)
+                design = designs[design_key]
+                inserted_slide.Design = design
+                inserted_slide.CustomLayout = design.SlideMaster.CustomLayouts.Item(source.CustomLayout.Index)
+                inserted_slide.FollowMasterBackground = source.FollowMasterBackground
+                LOGGER.info("슬라이드 삽입 %s #%s -> #%s", key, item.slide_index, number)
+                source = presentation = design = inserted_slide = None
+                progress("copying", number, key)
+            check_cancel(cancel)
+            reconnect_internal_links(destination, mapping, links)
+            if int(destination.Slides.Count) != len(slides):
+                raise GenerationError("출력 슬라이드 수가 예상과 다릅니다.")
+            check_cancel(cancel)
+            progress("saving", len(slides), "")
+            destination.SaveAs(str(target), 24)
+            LOGGER.info("PPT 임시 저장 요청=%s 실제=%s", target, destination.FullName)
+            if not target.is_file():
+                raise GenerationError("PowerPoint가 로컬 임시 PPT를 저장하지 못했습니다. 실행 로그를 확인하세요.")
+        except InternalLinkError as error:
+            LOGGER.exception("내부 링크 확인·재연결 실패")
+            raise GenerationError("내부 슬라이드 링크를 연결하지 못했습니다. 링크 대상과 로그를 확인하세요.") from error
+        except PowerPointError:
+            raise
+        except Exception as error:
+            LOGGER.exception("슬라이드 결합 실패")
+            raise GenerationError("슬라이드를 결합하거나 저장하지 못했습니다. 실행 로그를 확인하세요.") from error
+        finally:
+            source = presentation = design = inserted_slide = None
+            designs.clear()
+            if destination is not None:
+                try:
+                    destination.Saved = True
+                    destination.Close()
+                except Exception as error:
+                    LOGGER.exception("출력 프레젠테이션 닫기 실패")
+                    raise GenerationError("출력 PowerPoint를 정리하지 못했습니다. 로그를 확인하세요.") from error
+                finally:
+                    destination = None
 
     def _close(self) -> None:
         self._assert_thread()

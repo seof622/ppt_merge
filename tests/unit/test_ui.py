@@ -149,6 +149,8 @@ class UiTests(unittest.TestCase):
     def test_close_waits_for_worker_without_freezing_gui(self):
         self.factory.delay = 0.06
         self.window.add_sources([self.a])
+        # 작업 시작 전에 취소되어 타이머가 돌 틈이 없는 경우를 제외한다.
+        wait_until(lambda: bool(self.factory.threads))
         self.window.close()
         self.assertTrue(self.window.isVisible())
         self.assertFalse(self.window.add_action.isEnabled())

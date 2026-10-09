@@ -11,3 +11,4 @@ class SlideItem:
     slide_id: int
     thumbnail_path: str | None = None
     title: str | None = None
+    source_revision: str | None = None

@@ -25,10 +25,14 @@ class SourceChangedError(ThumbnailError):
     pass
 
 
+class GenerationError(PowerPointError):
+    pass
+
+
 class OperationCancelled(PowerPointError):
     pass
 
 
 def check_cancel(cancel: CancelCallback | None) -> None:
     if cancel is not None and cancel():
-        raise OperationCancelled("썸네일 작업을 취소했습니다.")
+        raise OperationCancelled("작업을 취소했습니다.")

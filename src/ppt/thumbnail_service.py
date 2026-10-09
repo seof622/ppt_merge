@@ -13,8 +13,6 @@ from pathlib import Path
 import shutil
 import tempfile
 from typing import Any, Protocol
-from zipfile import BadZipFile, ZipFile
-import xml.etree.ElementTree as ET
 
 from PIL import Image
 
@@ -22,6 +20,8 @@ from src.models.presentation_model import PresentationInfo
 from src.models.slide_model import SlideItem
 from src.ppt.errors import (CancelCallback, OperationCancelled, PresentationOpenError,
                             SourceChangedError, ThumbnailError, check_cancel)
+from src.ppt.source_validation import (file_hash as _file_hash, fingerprint as _fingerprint,
+                                       validate_source as _validate_source, revision)
 from src.ppt.presentation_manager import PresentationManager
 
 LOGGER = logging.getLogger("ppt_merge.thumbnails")
@@ -52,43 +52,6 @@ class ThumbnailResult:
 
 
 ProgressCallback = Callable[[ThumbnailProgress], None]
-
-
-def _file_hash(path: Path, cancel: CancelCallback | None = None) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        while block := stream.read(1024 * 1024):
-            check_cancel(cancel)
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def _fingerprint(path: Path, cancel: CancelCallback | None) -> dict[str, Any]:
-    before = path.stat()
-    digest = _file_hash(path, cancel)
-    after = path.stat()
-    if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
-        raise SourceChangedError("작업 중 PPT 파일이 변경되었습니다. 저장을 마친 뒤 다시 시도하세요.")
-    return {"path": os.path.normcase(str(path)), "size": after.st_size,
-            "mtime_ns": after.st_mtime_ns, "sha256": digest}
-
-
-def _validate_source(path: Path) -> None:
-    if path.suffix.lower() not in (".pptx", ".pptm"):
-        raise PresentationOpenError("PPTX 또는 PPTM 파일을 선택하세요.")
-    if not path.is_file():
-        raise PresentationOpenError(f"PowerPoint 파일을 찾을 수 없습니다: {path}")
-    try:
-        with path.open("rb") as stream:
-            if stream.read(8) == bytes.fromhex("D0CF11E0A1B11AE1"):
-                raise PresentationOpenError("암호 보호 등으로 자동으로 열 수 없는 PowerPoint 파일입니다.")
-        with ZipFile(path) as archive:
-            ET.fromstring(archive.read("ppt/presentation.xml"))
-            archive.getinfo("ppt/_rels/presentation.xml.rels")
-    except (BadZipFile, KeyError, ET.ParseError, RuntimeError) as error:
-        if isinstance(error, PresentationOpenError):
-            raise
-        raise PresentationOpenError("PowerPoint 파일이 손상되었거나 지원되지 않는 형식입니다.") from error
 
 
 def _dimensions(info: PresentationInfo, width: int) -> tuple[int, int]:
@@ -147,7 +110,8 @@ class ThumbnailService:
                         or (record["title"] is not None and not isinstance(record["title"], str))):
                     return None, set()
                 items.append(SlideItem(str(path), path.name, index, record["id"],
-                                       str(directory / f"slide_{index}.png"), record["title"]))
+                                       str(directory / f"slide_{index}.png"), record["title"],
+                                       revision(identity["source"])))
             info = PresentationInfo(str(path), path.name, float(manifest["width_points"]),
                                     float(manifest["height_points"]), tuple(items))
             width, height = _dimensions(info, self.width)
@@ -208,7 +172,7 @@ class ThumbnailService:
                 with self._backend_factory() as backend:
                     info = backend.read_presentation(path, cancel)
                     # 같은 원본의 손상 이미지 복구라도 메타데이터가 달라졌으면 모두 재생성한다.
-                    if cached is None or replace(cached, slides=tuple(replace(s, thumbnail_path=None)
+                    if cached is None or replace(cached, slides=tuple(replace(s, thumbnail_path=None, source_revision=None)
                                                                         for s in cached.slides)) != info:
                         valid = set()
                     width, height = _dimensions(info, self.width)
@@ -237,7 +201,8 @@ class ThumbnailService:
                 check_cancel(cancel)
                 self._publish(staging, directory)
                 result_info = replace(info, slides=tuple(replace(slide, thumbnail_path=str(
-                    directory / f"slide_{slide.slide_index}.png")) for slide in info.slides))
+                    directory / f"slide_{slide.slide_index}.png"),
+                    source_revision=revision(identity["source"])) for slide in info.slides))
                 report("completed", info.slide_count, info.slide_count)
                 LOGGER.info("썸네일 캐시 저장 %s 생성=%s 재사용=%s", path, generated, info.slide_count - generated)
                 return ThumbnailResult(result_info, str(directory), False, generated)

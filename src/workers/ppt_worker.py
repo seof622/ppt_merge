@@ -61,3 +61,48 @@ class PptWorker(QObject):
                     self.failed.emit(path, "파일을 불러오는 중 오류가 발생했습니다. 실행 로그를 확인하세요.")
         finally:
             self.finished.emit()
+
+
+class GenerationWorker(QObject):
+    """생성 준비와 실행을 각각 QThread에서 처리한다."""
+
+    prepared = Signal(object)
+    generated = Signal(object)
+    progress = Signal(object)
+    failed = Signal(str)
+    cancelled = Signal()
+    finished = Signal()
+
+    def __init__(self, service_factory, slides=(), output=None, *, plan=None,
+                 overwrite=False, allow_mixed_sizes=False) -> None:
+        super().__init__()
+        self._service_factory = service_factory
+        self._slides, self._output, self._plan = tuple(slides), output, plan
+        self._overwrite, self._allow_mixed_sizes = overwrite, allow_mixed_sizes
+        self._cancel = threading.Event()
+
+    def request_cancel(self) -> None:
+        self._cancel.set()
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            service = self._service_factory()
+            if self._plan is None:
+                result = service.prepare(self._slides, Path(self._output), overwrite=self._overwrite,
+                                         progress=self.progress.emit, cancel=self._cancel.is_set)
+                self.prepared.emit(result)
+            else:
+                result = service.generate(self._plan, allow_mixed_sizes=self._allow_mixed_sizes,
+                                          progress=self.progress.emit, cancel=self._cancel.is_set)
+                self.generated.emit(result)
+        except OperationCancelled:
+            self.cancelled.emit()
+        except PowerPointError as error:
+            LOGGER.warning("PPT 생성 실패: %s", error)
+            self.failed.emit(str(error))
+        except Exception:
+            LOGGER.exception("PPT 생성 작업 중 예외")
+            self.failed.emit("PPT 생성 작업 중 오류가 발생했습니다. 실행 로그를 확인하세요.")
+        finally:
+            self.finished.emit()

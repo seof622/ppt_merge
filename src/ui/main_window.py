@@ -11,13 +11,14 @@ from uuid import uuid4
 from PySide6.QtCore import QThread, QTimer, Qt, Slot
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (QFileDialog, QLabel, QMainWindow, QProgressBar, QPushButton,
-                               QSplitter, QToolBar, QVBoxLayout, QWidget)
+                               QSplitter, QToolBar, QVBoxLayout, QMessageBox, QWidget)
 
 from src.ppt.thumbnail_service import ThumbnailProgress, ThumbnailResult, ThumbnailService
 from src.ui.slide_grid import ElidedLabel, SlideGrid
 from src.ui.source_panel import SourcePanel
 from src.ui.output_panel import OutputPanel
-from src.workers.ppt_worker import PptWorker
+from src.workers.ppt_worker import PptWorker, GenerationWorker
+from src.ppt.powerpoint_service import (PowerPointService, GenerationPlan, GenerationProgress, GenerationResult)
 
 
 @dataclass
@@ -30,9 +31,10 @@ class SourceState:
 
 class MainWindow(QMainWindow):
     def __init__(self, cache_root: Path,
-                 service_factory: Callable[[], ThumbnailService] | None = None) -> None:
+                 service_factory: Callable[[], ThumbnailService] | None = None,
+                 generation_service_factory: Callable[[], PowerPointService] | None = None) -> None:
         super().__init__()
-        self.setWindowTitle("PPT Merge · 슬라이드 순서 편집")
+        self.setWindowTitle("PPT Merge · 슬라이드 결합")
         self.resize(1600, 900)
         self.setMinimumSize(1000, 640)
         self.setAcceptDrops(True)
@@ -43,6 +45,14 @@ class MainWindow(QMainWindow):
         self._thread: QThread | None = None
         self._worker: PptWorker | None = None
         self._closing = False
+        self._generation_factory = generation_service_factory or PowerPointService
+        self._generation_thread: QThread | None = None
+        self._generation_worker: GenerationWorker | None = None
+        self._prepared_plan: GenerationPlan | None = None
+        self._generation_outcome = ""
+        self._generation_cancelling = False
+        self._allow_mixed_sizes: bool | None = None
+        self.last_generation_result: GenerationResult | None = None
 
         toolbar = QToolBar("파일 작업")
         toolbar.setMovable(False)
@@ -94,6 +104,11 @@ class MainWindow(QMainWindow):
         composer.setCollapsible(0, False)
         composer.setCollapsible(1, False)
         layout.addWidget(composer, 1)
+        self.generate_button = QPushButton("PPT 생성…")
+        self.generate_button.setMinimumHeight(36)
+        self.generate_button.clicked.connect(self.choose_output)
+        self.output_panel.footer.addWidget(self.generate_button)
+        self.output_panel.model.modelReset.connect(self._update_actions)
         self.setCentralWidget(container)
         self.source_panel.current_source_changed.connect(self._show_source)
         self.source_panel.selection_changed.connect(self._update_actions)
@@ -116,13 +131,151 @@ class MainWindow(QMainWindow):
     def is_loading(self) -> bool:
         return self._thread is not None
 
+    @property
+    def is_generating(self) -> bool:
+        return self._generation_thread is not None
+
+    @property
+    def is_busy(self) -> bool:
+        return self.is_loading or self.is_generating
+
+    def choose_output(self) -> None:
+        if self.is_busy or self._closing:
+            return
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "새 PowerPoint 저장", "result.pptx", "PowerPoint (*.pptx)",
+            options=QFileDialog.Option.DontConfirmOverwrite)
+        if not filename:
+            return
+        path = Path(filename)
+        if not path.suffix:
+            path = path.with_suffix(".pptx")
+        originals = [state.path for state in self._sources.values()]
+        originals += [slide.source_file for slide in self.output_panel.output_slides]
+        if any(os.path.normcase(str(Path(source).resolve())) == os.path.normcase(str(path.resolve()))
+               or (path.exists() and Path(source).exists() and path.samefile(source)) for source in originals):
+            self._show_generation_error("원본 PowerPoint 파일에는 저장할 수 없습니다. 다른 경로를 선택하세요.")
+            return
+        overwrite = False
+        if path.exists():
+            overwrite = QMessageBox.question(
+                self, "파일 덮어쓰기", f"기존 파일을 덮어쓸까요?\n{path}",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes
+            if not overwrite:
+                return
+        self.start_generation(path, overwrite=overwrite)
+
+    def start_generation(self, output: Path, *, overwrite: bool = False,
+                         allow_mixed_sizes: bool | None = None) -> bool:
+        if self.is_busy or self._closing or not self.output_panel.output_slides:
+            return False
+        self._allow_mixed_sizes = allow_mixed_sizes
+        self.last_generation_result = None
+        self.notice.hide()
+        self._launch_generation_worker(GenerationWorker(
+            self._generation_factory, tuple(self.output_panel.output_slides), output, overwrite=overwrite))
+        return True
+
+    def _launch_generation_worker(self, worker: GenerationWorker) -> None:
+        self._prepared_plan = None
+        self._generation_outcome = ""
+        self._generation_cancelling = False
+        thread = QThread(self)
+        self._generation_thread, self._generation_worker = thread, worker
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run, Qt.ConnectionType.QueuedConnection)
+        worker.prepared.connect(self._on_prepared, Qt.ConnectionType.QueuedConnection)
+        worker.generated.connect(self._on_generated, Qt.ConnectionType.QueuedConnection)
+        worker.progress.connect(self._on_generation_progress, Qt.ConnectionType.QueuedConnection)
+        worker.failed.connect(self._show_generation_error, Qt.ConnectionType.QueuedConnection)
+        worker.cancelled.connect(self._on_generation_cancelled, Qt.ConnectionType.QueuedConnection)
+        worker.finished.connect(thread.quit, Qt.ConnectionType.QueuedConnection)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._generation_finished, Qt.ConnectionType.QueuedConnection)
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.show()
+        self.cancel_button.setEnabled(True)
+        self.cancel_button.show()
+        self.status_text.setText("PPT 생성 작업을 준비합니다…")
+        self._update_actions()
+        thread.start()
+
+    @Slot(object)
+    def _on_prepared(self, plan: GenerationPlan) -> None:
+        self._prepared_plan = plan
+
+    @Slot(object)
+    def _on_generated(self, result: GenerationResult) -> None:
+        self.last_generation_result = result
+        self._generation_outcome = f"저장 완료 · {result.slide_count}장 · {result.output_path}"
+        self.status_text.setToolTip(result.output_path)
+
+    @Slot(object)
+    def _on_generation_progress(self, event: GenerationProgress) -> None:
+        labels = {"checking": "원본 확인", "opening": "PowerPoint 시작", "copying": "슬라이드 결합",
+                  "saving": "PPT 저장", "saved": "PowerPoint 정리", "verifying": "결과 확인", "publishing": "결과 파일 저장", "completed": "저장 완료"}
+        self.progress_bar.setRange(0, event.total if event.stage in ("checking", "copying", "completed") else 0)
+        self.progress_bar.setValue(event.completed)
+        self.status_text.setText(labels.get(event.stage, "PPT 생성") +
+                                 (f" · {event.completed}/{event.total}" if event.total else "…") +
+                                 (f" · {Path(event.source_file).name}" if event.source_file else ""))
+
+    @Slot(str)
+    def _show_generation_error(self, message: str) -> None:
+        self._generation_outcome = message
+        self.notice.setText(message)
+        self.notice.setToolTip(message)
+        self.notice.show()
+
+    @Slot()
+    def _on_generation_cancelled(self) -> None:
+        self._generation_outcome = "PPT 생성을 취소했습니다."
+
+    @Slot()
+    def _generation_finished(self) -> None:
+        thread = self._generation_thread
+        if thread is not None and not thread.wait(0):
+            QTimer.singleShot(10, self._generation_finished)
+            return
+        plan = self._prepared_plan
+        self._prepared_plan = None
+        self._generation_thread = self._generation_worker = None
+        if thread is not None:
+            thread.deleteLater()
+        self.progress_bar.hide()
+        self.cancel_button.hide()
+        self._update_actions()
+        if self._closing:
+            QTimer.singleShot(0, self.close)
+            return
+        if plan is not None and not self._generation_cancelling:
+            allow = self._allow_mixed_sizes
+            if plan.mixed_sizes and allow is None:
+                descriptions = "\n".join(f"{Path(s.path).name}: {s.width_points:g} × {s.height_points:g} pt"
+                                         for s in plan.sources)
+                allow = QMessageBox.warning(
+                    self, "슬라이드 크기가 다릅니다",
+                    f"{descriptions}\n\n첫 출력 슬라이드의 크기로 저장합니다. "
+                    "비율이 다른 슬라이드는 모양이나 배치가 달라질 수 있습니다. 계속할까요?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes
+            if plan.mixed_sizes and not allow:
+                self.status_text.setText("슬라이드 크기 확인 후 생성을 취소했습니다.")
+                return
+            self._launch_generation_worker(GenerationWorker(
+                self._generation_factory, plan=plan, allow_mixed_sizes=bool(allow)))
+        else:
+            self.status_text.setText(self._generation_outcome or "PPT 생성을 취소했습니다.")
+            self._start_pending()
+
     def choose_files(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(self, "PowerPoint 파일 추가", "",
                                                "PowerPoint (*.pptx *.pptm)")
         self.add_sources(paths)
 
     def add_sources(self, paths: Iterable[str | Path]) -> None:
-        if self._closing:
+        if self._closing or self.is_generating:
             return
         rejected = []
         added = []
@@ -154,7 +307,7 @@ class MainWindow(QMainWindow):
         self._start_pending()
 
     def _start_pending(self) -> None:
-        if self.is_loading or not self._pending or self._closing:
+        if self.is_busy or not self._pending or self._closing:
             return
         self._active = tuple(self._pending)
         self._pending.clear()
@@ -261,6 +414,11 @@ class MainWindow(QMainWindow):
             self._start_pending()
 
     def cancel_loading(self) -> None:
+        if self._generation_worker is not None:
+            self._generation_cancelling = True
+            self._generation_worker.request_cancel()
+            self.cancel_button.setEnabled(False)
+            self.status_text.setText("현재 작업을 마친 뒤 PPT 생성을 취소합니다…")
         for key in self._pending:
             self._mark_cancelled(key)
         self._pending.clear()
@@ -286,14 +444,17 @@ class MainWindow(QMainWindow):
 
     def _update_actions(self) -> None:
         selected = bool(self.source_panel.selected_keys())
-        available = not self.is_loading and not self._closing
+        available = not self.is_busy and not self._closing
         self.remove_action.setEnabled(selected and available)
         self.reload_action.setEnabled(selected and available)
         self.clear_action.setEnabled(bool(self._sources) and available)
-        self.add_action.setEnabled(not self._closing)
+        self.add_action.setEnabled(not self._closing and not self.is_generating)
+        self.generate_button.setEnabled(bool(self.output_panel.output_slides) and available)
+        self.output_panel.setEnabled(not self.is_generating and not self._closing)
+        self.slide_grid.setEnabled(not self.is_generating and not self._closing)
 
     def remove_selected(self) -> None:
-        if self.is_loading or self._closing:
+        if self.is_busy or self._closing:
             return
         keys = self.source_panel.selected_keys()
         for key in keys:
@@ -303,7 +464,7 @@ class MainWindow(QMainWindow):
         self._update_summary()
 
     def clear_sources(self) -> None:
-        if self.is_loading or self._closing:
+        if self.is_busy or self._closing:
             return
         self._sources.clear()
         self._pending.clear()
@@ -318,7 +479,7 @@ class MainWindow(QMainWindow):
         self.status_text.setText(f"{len(ready)}개 파일 · {count}장 준비됨")
 
     def reload_selected(self) -> None:
-        if self.is_loading or self._closing:
+        if self.is_busy or self._closing:
             return
         for key in self.source_panel.selected_keys():
             self._sources[key].status = "queued"
@@ -328,7 +489,7 @@ class MainWindow(QMainWindow):
         self._start_pending()
 
     def dragEnterEvent(self, event) -> None:
-        if not self._closing and event.mimeData().hasUrls():
+        if not self._closing and not self.is_generating and event.mimeData().hasUrls():
             if any(url.isLocalFile() and Path(url.toLocalFile()).suffix.lower() in (".pptx", ".pptm")
                    for url in event.mimeData().urls()):
                 event.acceptProposedAction()
@@ -338,7 +499,7 @@ class MainWindow(QMainWindow):
         event.acceptProposedAction()
 
     def closeEvent(self, event) -> None:
-        if self.is_loading:
+        if self.is_busy:
             self._closing = True
             self.cancel_loading()
             self._update_actions()
