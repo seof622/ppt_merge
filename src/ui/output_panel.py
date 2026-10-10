@@ -6,12 +6,13 @@ from uuid import uuid4
 from PySide6.QtCore import QModelIndex, QSize, Qt, Signal, QItemSelectionModel
 from PySide6.QtGui import QAction, QColor, QDrag, QKeySequence, QPainter, QPen
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel, QListView, QMenu,
-                               QPushButton, QVBoxLayout, QWidget)
+                               QVBoxLayout, QWidget)
 
 from src.models.project_model import OutputSequence
 from src.models.slide_model import SlideItem
 from src.ui.slide_grid import SlideListModel
 from src.ui.slide_mime import make_slide_mime, read_slide_mime
+from src.ui.icons import icon, icon_button
 
 
 class OutputListModel(SlideListModel):
@@ -28,7 +29,7 @@ class OutputListModel(SlideListModel):
         if index.isValid() and 0 <= index.row() < self.rowCount():
             slide = self.slides[index.row()]
             if role == Qt.ItemDataRole.DisplayRole:
-                return f"{index.row() + 1} · {slide.source_file_name}\n원본 슬라이드 {slide.slide_index}"
+                return f"{index.row() + 1} · {slide.source_file_name}\n#{slide.slide_index}"
             if role == Qt.ItemDataRole.ToolTipRole:
                 return f"출력 {index.row() + 1}번\n{slide.source_file}\n원본 슬라이드 {slide.slide_index}\n{slide.title or ''}"
             if role == Qt.ItemDataRole.SizeHintRole:
@@ -187,7 +188,7 @@ class OutputListView(QListView):
         if self.model().rowCount() == 0:
             painter.setPen(QColor("#64748b"))
             painter.drawText(self.viewport().rect(), Qt.AlignmentFlag.AlignCenter,
-                             "선택한 슬라이드를 담거나 이곳에 끌어 놓으세요.")
+                             "슬라이드를 끌어 놓으세요")
         if self._insert_row is not None:
             row = self._insert_row
             if self.model().rowCount() == 0:
@@ -204,19 +205,23 @@ class OutputListView(QListView):
 class OutputPanel(QWidget):
     def __init__(self, parent=None, drag_token: str = "") -> None:
         super().__init__(parent)
+        self.setObjectName("outputPanel")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 12, 18, 12)
-        layout.setSpacing(6)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
         header = QHBoxLayout()
-        heading = QLabel("출력 슬라이드 순서")
+        header.setSpacing(8)
+        heading = QLabel("결과물 미리보기")
         heading.setObjectName("sectionTitle")
         self.count = QLabel("0장 · 0장 선택")
         self.count.setObjectName("mutedText")
         header.addWidget(heading)
         header.addWidget(self.count, 1)
-        self.clear_button = QPushButton("출력 비우기")
+        self.clear_button = icon_button("clear", "출력 비우기", self)
         self.clear_button.clicked.connect(lambda: self.model.clear())
         tools = QHBoxLayout()
+        tools.setSpacing(4)
         self.actions: dict[str, QAction] = {}
         commands = (("remove", "선택 삭제", "Delete", self.remove_selected),
                     ("duplicate", "복제", "Ctrl+D", self.duplicate_selected),
@@ -230,7 +235,10 @@ class OutputPanel(QWidget):
             action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             action.triggered.connect(callback)
             self.addAction(action)
-            button = QPushButton(text)
+            icon_name = {"remove": "remove", "duplicate": "duplicate", "up": "previous",
+                         "down": "next", "first": "first", "last": "last"}[key]
+            action.setIcon(icon(icon_name))
+            button = icon_button(icon_name, text, self)
             description = "선택한 슬라이드를 한 번 더 담기" if key == "duplicate" else text
             action.setToolTip(f"{description} ({shortcut})")
             button.setToolTip(action.toolTip())
@@ -251,12 +259,12 @@ class OutputPanel(QWidget):
         self.view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.view.customContextMenuRequested.connect(self._context_menu)
         layout.addWidget(self.view, 1)
-        hint = QLabel("왼쪽부터 최종 순서 · Ctrl·Shift 선택 · 드래그로 순서 변경\n"
-                      "목록은 앱 종료 시 초기화됩니다. ‘PPT 생성’으로 새 파일을 저장하세요.")
-        hint.setObjectName("mutedText")
-        hint.setWordWrap(True)
+        self.view.setAccessibleName("출력 슬라이드 순서")
+        self.view.setToolTip("왼쪽부터 최종 순서 · Ctrl·Shift 선택 · 드래그로 순서 변경\n"
+                             "Delete 삭제 · Ctrl+D 복제 · 목록은 앱 종료 시 초기화됩니다.")
         self.footer = QHBoxLayout()
-        self.footer.addWidget(hint, 1)
+        self.footer.setSpacing(8)
+        self.footer.addStretch(1)
         layout.addLayout(self.footer)
         self._update_actions()
 

@@ -1,4 +1,5 @@
 """원본 코드·가상환경과 분리한 경로에서 완성 EXE를 검증한다."""
+import argparse
 import hashlib
 import json
 import os
@@ -12,7 +13,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main() -> int:
-    executable = ROOT / "dist/PPTMerge.exe"
+    parser = argparse.ArgumentParser(description="지정한 EXE의 실제 Windows 실행 검증")
+    parser.add_argument("--exe", type=Path, default=ROOT / "dist/PPTMerge.exe",
+                        help="검증할 EXE (기본: dist/PPTMerge.exe)")
+    executable = parser.parse_args().exe.resolve()
     if not executable.is_file():
         raise SystemExit("먼저 scripts/build_exe.py를 실행하세요.")
     directory = Path(tempfile.mkdtemp(prefix="package_validation_", dir=ROOT / "output"))
