@@ -1,9 +1,11 @@
 """메인 화면의 폴더 탐색과 읽은 원본 목록. COM을 호출하지 않는다."""
 from pathlib import Path
-from PySide6.QtCore import QDir, QEvent, QItemSelectionModel, QSignalBlocker, QStandardPaths, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QDir, QEasingCurve, QEvent, QItemSelectionModel, QPropertyAnimation, QSignalBlocker, QStandardPaths, QTimer, Qt, Signal, Slot
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QFileSystemModel, QFrame, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QStackedWidget, QTreeView, QVBoxLayout)
+    QLineEdit, QListWidget, QListWidgetItem, QSizePolicy, QStackedWidget, QTreeView, QVBoxLayout, QWidget)
 from src.ui.file_browser import FileSearchThread, SourceTreeModel, source_key
+from src.ui.icons import icon_button
 
 class SourcePanel(QFrame):
     current_source_changed = Signal(str)
@@ -25,12 +27,40 @@ class SourcePanel(QFrame):
         layout.setContentsMargins(12, 14, 12, 12)
         self.heading = QLabel("폴더")
         self.heading.setObjectName("sectionTitle")
-        layout.addWidget(self.heading)
+        self.heading.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        heading_layout = QHBoxLayout()
+        heading_layout.addWidget(self.heading)
+        self.search_slot = QWidget()
+        slot_layout = QHBoxLayout(self.search_slot)
+        slot_layout.setContentsMargins(0, 0, 0, 0)
+        slot_layout.setSpacing(0)
+        slot_layout.addStretch()
+        heading_layout.addWidget(self.search_slot, 1)
+        self.search_button = icon_button("search", "PPT 검색 열기 (Ctrl+F)")
+        self.search_button.setCheckable(True)
+        self.search_button.setObjectName("searchToggle")
+        heading_layout.addWidget(self.search_button)
+        layout.addLayout(heading_layout)
+        self.search_container = QWidget()
+        search_layout = QVBoxLayout(self.search_container)
+        search_layout.setContentsMargins(0, 0, 0, 0)
         self.search = QLineEdit()
         self.search.setPlaceholderText("PPT 검색")
         self.search.setAccessibleName("최상위 폴더 아래의 PPT 파일명 검색")
         self.search.setClearButtonEnabled(True)
-        layout.addWidget(self.search)
+        search_layout.addWidget(self.search)
+        self.search_slot.setFixedHeight(self.search.sizeHint().height())
+        self.search_container.setMaximumWidth(0)
+        self.search_container.hide()
+        slot_layout.addWidget(self.search_container, 1)
+        self._search_animation = QPropertyAnimation(self.search_container, b"maximumWidth", self)
+        self._search_animation.setDuration(180)
+        self._search_animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self._search_animation.finished.connect(self._search_animation_finished)
+        self.search_button.toggled.connect(self._toggle_search)
+        self.search.installEventFilter(self)
+        self._search_shortcut = QShortcut(QKeySequence.StandardKey.Find, self)
+        self._search_shortcut.activated.connect(self._open_search)
         self.stack = QStackedWidget()
         layout.addWidget(self.stack, 1)
         self.file_model = QFileSystemModel(self)
@@ -101,6 +131,36 @@ class SourcePanel(QFrame):
         desktop = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DesktopLocation)
         self.set_root(Path(desktop) if desktop and Path(desktop).is_dir() else Path.home())
 
+    def _open_search(self) -> None:
+        self.search_button.setChecked(True)
+        self.search.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self.search.selectAll()
+
+    def _toggle_search(self, expanded: bool) -> None:
+        self._search_animation.stop()
+        current_width = self.search_container.width() if self.search_container.isVisible() else 0
+        self.search_container.setMaximumWidth(current_width)
+        description = "PPT 검색 닫기 (Esc)" if expanded else "PPT 검색 열기 (Ctrl+F)"
+        self.search_button.setToolTip(description)
+        self.search_button.setAccessibleName(description)
+        if expanded:
+            self.search_container.show()
+            self.search.setFocus(Qt.FocusReason.OtherFocusReason)
+        else:
+            self.search.clear()
+            self.search_button.setFocus(Qt.FocusReason.OtherFocusReason)
+        # 오른쪽 끝을 고정하고 현재 너비에서 왼쪽으로 펼치거나 접는다.
+        self._search_animation.setStartValue(current_width)
+        self._search_animation.setEndValue(self.search_slot.width() if expanded else 0)
+        self._search_animation.start()
+
+    def _search_animation_finished(self) -> None:
+        if self.search_button.isChecked():
+            # 펼친 뒤에는 사이드바 크기를 바꿔도 남은 너비를 모두 채운다.
+            self.search_container.setMaximumWidth(16777215)
+        else:
+            self.search_container.hide()
+
     def set_root(self, path: str | Path) -> bool:
         root = Path(path).resolve()
         if not root.is_dir():
@@ -125,6 +185,10 @@ class SourcePanel(QFrame):
         return self.file_model.filePath(self.tree_model.mapToSource(index)) if index.isValid() else ""
 
     def eventFilter(self, watched, event) -> bool:
+        if (watched == self.search and event.type() == QEvent.Type.KeyPress
+                and event.key() == Qt.Key.Key_Escape):
+            self.search_button.setChecked(False)
+            return True
         if event.type() == QEvent.Type.FocusIn:
             self._selection_origin = "originals" if watched == self.list else "explorer"
             self.selection_changed.emit()

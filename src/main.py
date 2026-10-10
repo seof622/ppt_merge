@@ -21,6 +21,7 @@ QMainWindow { background: #f8fafc; }
 QToolBar { background: #ffffff; border: none; border-bottom: 1px solid #e2e8f0; padding: 10px 14px; spacing: 8px; }
 QToolButton { padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #ffffff; }
 QToolButton:hover { background: #eff6ff; border-color: #93c5fd; }
+QToolButton#searchToggle:checked { background: #dbeafe; border-color: #3b82f6; }
 QToolButton:disabled { color: #94a3b8; border-color: #e2e8f0; }
 QFrame#sourcePanel, QFrame#originalsPanel { background: #ffffff; border-right: 1px solid #e2e8f0; }
 QLabel#sectionTitle { font-size: 18px; font-weight: 600; }

@@ -2,11 +2,15 @@
 
 2026-10-09, PyInstaller 6.22.3 · hooks 2026.8로 Windows x64 EXE를 생성했다.
 
-최신 파일: dist/separate-originals/PPTMerge.exe, 54634262 bytes (약 52.1 MiB). SHA-256: 6578034b5332fde298adac4c394425a16821a63812eb3d8cc7b375724b418b40
+최종 파일: `dist/PPTMerge.exe` (2026-10-10 검색창의 같은 줄 왼쪽 펼치기·접기 반영). 이전 배포 버전과 검증용 EXE 복사본을 삭제하고 최종 실행 파일 하나만 유지한다.
+
+검색 아이콘 클릭 시 검색창이 180ms 동안 같은 줄에서 왼쪽으로 펼쳐진다. ‘폴더’ 제목과 돋보기 사이의 남은 너비를 채우고, 돋보기와 아래 파일 목록의 위치는 유지한다. Ctrl+F로 열기, 입력 포커스 이동, 아이콘 재클릭·Esc로 검색어 초기화 및 접기를 지원한다. 검색·파일 탐색 회귀 테스트 32개를 통과했고, 실제 Qt 이벤트 루프에서 중간 애니메이션 너비·오른쪽 끝 고정·최종 너비 채우기·포커스·Esc·검색 대기 취소·Ctrl+F·빠른 방향 반전·사이드바 너비 220~420px 조절을 확인했다. 화면 캡처는 `output/search_inline_collapsed.png`, `output/search_inline_expanded.png`, `output/search_inline_expanded_compact.png`에 있다. 아래 Office 통합 검증 기록은 이전 빌드에 대한 것이다.
+
+기본 UI 회귀 테스트 9개도 통과해 관련 테스트는 총 41개다.
 
 ## 사용
 
-폴더·원본·슬라이드 카드 분리가 반영된 최신 화면은 dist/separate-originals/PPTMerge.exe를 더블클릭한다. 기존 실행 파일과 겹치지 않게 별도 폴더에 빌드했다. EXE 파일 하나를 다른 폴더에 복사해도 실행할 수 있도록 Python 3.12·PySide6·Pillow·pywin32 런타임을 포함했다. Microsoft PowerPoint는 실행 PC에 별도로 설치되어 있어야 한다. 설치 프로그램이나 관리자 권한은 요구하지 않는다.
+검색창의 왼쪽 펼치기·접기가 반영된 최종 화면은 dist/PPTMerge.exe를 더블클릭한다. EXE 파일 하나를 다른 폴더에 복사해도 실행할 수 있도록 Python 3.12·PySide6·Pillow·pywin32 런타임을 포함했다. Microsoft PowerPoint는 실행 PC에 별도로 설치되어 있어야 한다. 설치 프로그램이나 관리자 권한은 요구하지 않는다.
 
 EXE 실행 시 데이터는 다음 경로에 쓴다.
 
@@ -26,7 +30,7 @@ EXE 실행 시 데이터는 다음 경로에 쓴다.
 .\.venv\Scripts\python.exe -X utf8 scripts\build_exe.py
 ```
 
-실행 중인 EXE와 별도로 빌드하려면 `scripts/build_exe.py --dist-dir dist/separate-originals`를 사용한다. 다른 경로의 EXE 검증은 `scripts/validate_exe.py --exe dist/separate-originals/PPTMerge.exe`로 수행한다.
+기본 빌드는 `dist/PPTMerge.exe`를 갱신한다. 실행 중인 EXE는 닫은 뒤 빌드한다. EXE 검증은 `scripts/validate_exe.py`로 수행한다. 검증에서 생성하는 실행 파일 복사본은 검증 후 정리한다.
 
 빌드 설정은 packaging/PPTMerge.spec이며 결과는 dist/PPTMerge.exe, 중간 파일은 build/windows에 생성한다. 콘솔 없는 onefile 형태이며 Python·Qt·COM 모듈만 분석해서 포함한다. 기존 개인 파일·캐시·로그·테스트 PPT는 묶지 않는다. 배포 바이너리는 Git에서 제외한다.
 

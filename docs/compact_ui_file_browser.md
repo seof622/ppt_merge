@@ -33,4 +33,4 @@ $env:QT_QPA_PLATFORM = 'windows'
 
 사용자가 지정한 C:/Work/Side Project/ppt_merge를 실제 최상위 경로로 설정한 검색·클릭·검색 지우기 검증도 통과했다. 실제 파일 시스템의 A.pptx 검색 결과 6개 중 tests/fixtures/basic/A.pptx만 클릭했으며, 검색 해제 전후 원본 수는 1개로 유지되었다. 선택 이벤트와 경로 기록은 output/search_clear_reproduction.json에 있다. 이 재검증의 PPT 로드는 테스트 서비스로 수행해 COM을 사용하지 않았다.
 
-최신 실행 파일은 dist/separate-originals/PPTMerge.exe에 별도로 빌드했다. 실제 Office 썸네일 8장 로드, A2 → B4 → A1 → A2 생성, 40장 생성 중 종료·취소·PowerPoint 정리 등 19개 조건이 통과했다. 최신 보고서는 output/package_validation_scaad2uo/report.json이며 종료 코드 0, 총 22.053초, 남은 PowerPoint 프로세스 없음으로 확인했다. 바이너리 정보와 재검증 방법은 [EXE 패키징](exe_packaging.md)에 있다.
+원본 카드 분리 단계에서는 dist/separate-originals/PPTMerge.exe에 별도로 빌드했다. 실제 Office 썸네일 8장 로드, A2 → B4 → A1 → A2 생성, 40장 생성 중 종료·취소·PowerPoint 정리 등 19개 조건이 통과했다. 해당 보고서는 output/package_validation_scaad2uo/report.json이며 종료 코드 0, 총 22.053초, 남은 PowerPoint 프로세스 없음으로 확인했다. 이후 검색창의 왼쪽 펼치기·접기를 반영한 최종 파일을 `dist/PPTMerge.exe`로 정리하고 이전 실행 파일을 삭제했다. 바이너리 정보와 재검증 방법은 [EXE 패키징](exe_packaging.md)에 있다.
