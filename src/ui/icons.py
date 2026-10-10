@@ -25,13 +25,16 @@ _PATHS = {
 }
 
 
-def icon(name: str) -> QIcon:
+def icon(name: str, foreground: str | None = None) -> QIcon:
     result = QIcon()
     for mode, color in ((QIcon.Mode.Normal, "#475569"),
                         (QIcon.Mode.Disabled, "#94a3b8"),
                         (QIcon.Mode.Active, "#2563eb")):
-        if name == "presentation" and mode != QIcon.Mode.Disabled:
-            color = "#c43e1c"
+        if mode != QIcon.Mode.Disabled:
+            if foreground is not None:
+                color = foreground
+            elif name == "presentation":
+                color = "#c43e1c"
         svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
                f'fill="none" stroke="{color}" stroke-width="1.8" '
                f'stroke-linecap="round" stroke-linejoin="round">{_PATHS[name]}</svg>')
@@ -48,6 +51,7 @@ def icon_button(name: str, description: str, parent: QWidget | None = None) -> Q
     button = QToolButton(parent)
     button.setIcon(icon(name))
     button.setIconSize(QSize(20, 20))
+    button.setFixedSize(36, 36)
     button.setToolTip(description)
     button.setAccessibleName(description)
     button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)

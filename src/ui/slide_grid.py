@@ -102,10 +102,13 @@ class SlideGrid(QWidget):
 
     def __init__(self, parent=None, drag_token: str = "") -> None:
         super().__init__(parent)
+        self.setObjectName("slidePanel")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 18, 16, 16)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
         header = QHBoxLayout()
+        header.setSpacing(8)
         self.heading = ElidedLabel("슬라이드")
         self.heading.setObjectName("sectionTitle")
         self.count = QLabel("")
@@ -165,10 +168,11 @@ class SlideGrid(QWidget):
             return
         # 높이가 작은 창에서도 썸네일과 번호를 한 장씩 온전히 볼 수 있게 한다.
         compact = self.view.height() < 230
-        size = QSize(196, 136) if compact else QSize(276, 210)
+        size = QSize(196, 126) if compact else QSize(276, 210)
         if self.model.card_size != size:
             self.model.card_size = size
-            self.view.setIconSize(QSize(160, 90) if compact else QSize(248, 144))
+            self.view.setIconSize(QSize(160, 80) if compact else QSize(248, 144))
+            self.view.setSpacing(4 if compact else 10)
             self.view.doItemsLayout()
 
     def show_presentation(self, info: PresentationInfo) -> None:

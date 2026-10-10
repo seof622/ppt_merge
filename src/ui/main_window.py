@@ -69,6 +69,7 @@ class MainWindow(QMainWindow):
         self.add_action.triggered.connect(self.choose_files)
         toolbar.addAction(self.add_action)
         self.root_label = ElidedLabel("")
+        self.root_label.setObjectName("rootPath")
         self.root_label.setFixedWidth(360)
         self.root_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
         self.root_label.setAccessibleName("최상위 폴더 경로")
@@ -96,8 +97,10 @@ class MainWindow(QMainWindow):
             shortcut = action.shortcut().toString()
             action.setToolTip(action.text() + (f" ({shortcut})" if shortcut else ""))
             toolbar.widgetForAction(action).setAccessibleName(action.text())
+            toolbar.widgetForAction(action).setFixedSize(36, 36)
         toolbar.widgetForAction(self.add_action).setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.add_action.setIconText("폴더")
+        self.add_action.setIconText("폴더 선택")
+        toolbar.widgetForAction(self.add_action).setFixedWidth(112)
 
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -109,8 +112,9 @@ class MainWindow(QMainWindow):
         self.notice.hide()
         layout.addWidget(self.notice)
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setHandleWidth(4)
         self.source_panel = SourcePanel()
-        self.source_panel.setMinimumWidth(220)
+        self.source_panel.setMinimumWidth(260)
         self.source_panel.setMaximumWidth(420)
         self.originals_panel = self.source_panel.originals_panel
         self.originals_panel.setMinimumWidth(200)
@@ -130,6 +134,7 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 0)
         splitter.setStretchFactor(2, 1)
         composer = QSplitter(Qt.Orientation.Vertical)
+        composer.setHandleWidth(4)
         composer.addWidget(splitter)
         composer.addWidget(self.output_panel)
         composer.setSizes([590, 310])
@@ -137,8 +142,10 @@ class MainWindow(QMainWindow):
         composer.setCollapsible(1, False)
         layout.addWidget(composer, 1)
         self.generate_button = QPushButton("PPT 생성…")
-        self.generate_button.setIcon(icon("file"))
-        self.generate_button.setMinimumHeight(36)
+        self.generate_button.setObjectName("primaryButton")
+        self.generate_button.setIcon(icon("file", foreground="#ffffff"))
+        self.generate_button.setIconSize(QSize(20, 20))
+        self.generate_button.setFixedHeight(36)
         self.generate_button.clicked.connect(self.choose_output)
         self.output_panel.footer.addWidget(self.generate_button)
         self.output_panel.model.modelReset.connect(self._update_actions)
@@ -154,6 +161,7 @@ class MainWindow(QMainWindow):
         status = self.statusBar()
         status.setSizeGripEnabled(True)
         self.status_text = ElidedLabel("PPTX · PPTM")
+        self.status_text.setObjectName("statusText")
         status.addWidget(self.status_text, 1)
         self.progress_bar = QProgressBar()
         self.progress_bar.setFixedWidth(200)
@@ -164,20 +172,21 @@ class MainWindow(QMainWindow):
         self.cancel_button.clicked.connect(self.cancel_loading)
         self.cancel_button.hide()
         status.addPermanentWidget(self.cancel_button)
-        self.open_file_button = QPushButton("PPT 파일 열기")
+        self.open_file_button = QPushButton("파일 열기")
         self.open_file_button.clicked.connect(self._open_output_file)
         self.open_file_button.hide()
-        status.addPermanentWidget(self.open_file_button)
-        self.open_output_button = QPushButton("저장 폴더 열기")
+        self.open_output_button = QPushButton("폴더 열기")
         self.open_output_button.clicked.connect(self._open_output_folder)
         self.open_output_button.hide()
-        status.addPermanentWidget(self.open_output_button)
         for button, name in ((self.open_file_button, "file"), (self.open_output_button, "folder")):
-            description = button.text()
-            button.setIcon(icon(name))
-            button.setText("")
+            button.setObjectName("resultAction")
+            button.setFixedHeight(36)
+            description = "생성한 PPT 파일 열기" if name == "file" else "생성한 PPT의 저장 폴더 열기"
+            button.setIcon(icon(name, foreground="#2454a1"))
+            button.setIconSize(QSize(20, 20))
             button.setToolTip(description)
             button.setAccessibleName(description)
+            self.output_panel.footer.insertWidget(self.output_panel.footer.indexOf(self.generate_button), button)
         self._update_actions()
 
     @property
@@ -203,6 +212,7 @@ class MainWindow(QMainWindow):
         path = Path(self._last_saved_result.output_path)
         if not path.is_file():
             self._show_generation_error("저장한 PPT 파일을 찾을 수 없습니다. 파일이 이동되거나 삭제되었는지 확인하세요.")
+            self._update_actions()
         elif not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
             self._show_generation_error(f"PPT 파일을 열지 못했습니다. PowerPoint 연결 설정을 확인하세요: {path}")
         else:
@@ -215,6 +225,7 @@ class MainWindow(QMainWindow):
         directory = Path(self._last_saved_result.output_path).parent
         if not directory.is_dir():
             self._show_generation_error("저장 폴더를 찾을 수 없습니다. 파일이 이동되었는지 확인하세요.")
+            self._update_actions()
         elif not QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory))):
             self._show_generation_error(f"저장 폴더를 열지 못했습니다. 탐색기에서 확인하세요: {directory}")
 
@@ -564,8 +575,10 @@ class MainWindow(QMainWindow):
     def _update_actions(self) -> None:
         selected = bool(self.source_panel.selected_keys())
         available = not self.is_busy and not self._closing
-        self.open_file_button.setVisible(self._last_saved_result is not None and available)
-        self.open_output_button.setVisible(self._last_saved_result is not None and available)
+        saved_output_exists = (self._last_saved_result is not None
+                               and Path(self._last_saved_result.output_path).is_file())
+        self.open_file_button.setVisible(saved_output_exists and available)
+        self.open_output_button.setVisible(saved_output_exists and available)
         self.remove_action.setEnabled(selected and available)
         self.reload_action.setEnabled(selected and available)
         self.clear_action.setEnabled(bool(self._sources) and available)
