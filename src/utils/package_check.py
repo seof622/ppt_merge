@@ -11,18 +11,20 @@ from PySide6.QtCore import QObject, QTimer
 from src.utils.process_utils import process_pids
 
 
-def start_package_check(app, window, directory: Path, sources: list[Path], data_root: Path) -> None:
+def start_package_check(app, window, directory: Path, sources: list[Path], data_root: Path,
+                        *, all_slides: bool = False) -> None:
     app.setQuitOnLastWindowClosed(False)
-    window._package_check = _PackageCheck(app, window, directory, sources, data_root)
+    window._package_check = _PackageCheck(app, window, directory, sources, data_root, all_slides)
 
 
 class _PackageCheck(QObject):
-    def __init__(self, app, window, directory, sources, data_root):
+    def __init__(self, app, window, directory, sources, data_root, all_slides=False):
         super().__init__(window)
         self.app, self.window = app, window
         self.directory = directory.resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
         self.sources = [path.resolve() for path in sources]
+        self.all_slides = all_slides
         self.report = {
             "frozen": bool(getattr(sys, "frozen", False)),
             "executable": sys.executable, "architecture": platform.machine(),
@@ -72,7 +74,9 @@ class _PackageCheck(QObject):
             states = list(window._sources.values())
             self.check(len(states) == 2 and all(state.status == "ready" for state in states),
                        "Qt 워커에서 두 원본 썸네일 로드")
-            self.check(all(state.result.presentation.slide_count >= 4 for state in states), "원본마다 4장 이상")
+            minimum = 1 if self.all_slides else 4
+            self.check(all(state.result.presentation.slide_count >= minimum for state in states),
+                       f"원본마다 {minimum}장 이상")
             self.report["source_counts"] = [state.result.presentation.slide_count for state in states]
             self.report["cache_hits"] = [state.result.cache_hit for state in states]
             self.report["cache_directories"] = [state.result.cache_directory for state in states]
@@ -81,17 +85,18 @@ class _PackageCheck(QObject):
             self.check(not Path(self.report["data_root"]).is_relative_to(Path(self.report["bundle_root"])),
                        "사용자 데이터가 EXE 임시 압축 해제 경로 밖에 있음")
             a, b = [state.result.presentation.slides for state in states]
-            self.slides = (a[1], b[3], a[0], a[1])
+            self.slides = tuple(a) + tuple(b) if self.all_slides else (a[1], b[3], a[0], a[1])
             window.output_panel.add_slides(self.slides)
             self.check(window.start_generation(self.output), "GUI에서 실제 PPT 생성 시작")
             self.phase = "generating"
         elif self.phase == "generating" and not window.is_generating:
             result = window.last_generation_result
-            self.check(result is not None and result.slide_count == 4, "중복 포함 4장 생성 완료")
+            count = len(self.slides)
+            self.check(result is not None and result.slide_count == count, f"{count}장 생성 완료")
             with ZipFile(self.output) as archive:
                 xml = ET.fromstring(archive.read("ppt/presentation.xml"))
             ids = xml.find("{http://schemas.openxmlformats.org/presentationml/2006/main}sldIdLst")
-            self.check(len(ids) == 4, "생성 PPTX 패키지에서 4장 확인")
+            self.check(len(ids) == count, f"생성 PPTX 패키지에서 {count}장 확인")
             self.check(tuple(window.output_panel.output_slides) == self.slides, "출력 순서 유지")
             self.check(window.open_file_button.isVisible() and window.open_output_button.isVisible(),
                        "저장 결과 열기 버튼 표시")

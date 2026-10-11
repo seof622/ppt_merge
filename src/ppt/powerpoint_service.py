@@ -19,6 +19,7 @@ from src.models.slide_model import SlideItem
 from src.ppt.errors import (CancelCallback, GenerationError, PowerPointError,
                             SourceChangedError, check_cancel, file_error_message)
 from src.ppt.presentation_manager import PresentationManager
+from src.ppt.background_preservation import restore_slide_backgrounds
 from src.ppt.source_validation import file_hash, fingerprint, revision, validate_source
 
 LOGGER = logging.getLogger("ppt_merge.generation")
@@ -168,6 +169,8 @@ class PowerPointService:
                 check_cancel(cancel)
                 report("verifying", len(plan.slides))
                 self._check_sources(plan, cancel)
+                restored = restore_slide_backgrounds(plan.slides, temporary, cancel)
+                LOGGER.info("원본 개별 배경 복원 %s장", restored)
                 self._verify_result(temporary, len(plan.slides))
                 self._check_output(plan, cancel)
                 # 최종 교체는 출력과 같은 볼륨에서 수행하므로 다른 드라이브에도 안전하게 저장한다.

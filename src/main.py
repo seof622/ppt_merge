@@ -100,6 +100,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="PPT 슬라이드를 미리 보고 출력 순서를 편집합니다.")
     parser.add_argument("sources", nargs="*", type=Path)
     parser.add_argument("--package-check", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--package-check-all-slides", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     configure_logging(ROOT / "logs")
     app = QApplication(sys.argv[:1])
@@ -108,11 +109,12 @@ def main() -> int:
     window.show()
     if args.package_check:
         from src.utils.package_check import start_package_check
-        start_package_check(app, window, args.package_check, args.sources, ROOT)
+        start_package_check(app, window, args.package_check, args.sources, ROOT,
+                            all_slides=args.package_check_all_slides)
     elif args.sources:
         QTimer.singleShot(0, lambda: window.add_sources(args.sources))
     logger = logging.getLogger("ppt_merge.app")
-    logger.info("앱 시작 frozen=%s 데이터=%s", getattr(sys, "frozen", False), ROOT)
+    logger.info("앱 시작 frozen=%s 데이터=%s 실행파일=%s", getattr(sys, "frozen", False), ROOT, sys.executable)
     try:
         return app.exec()
     finally:

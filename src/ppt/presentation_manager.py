@@ -147,7 +147,7 @@ class PresentationManager:
                 progress: Callable[[str, int, str], None], cancel: CancelCallback | None = None) -> None:
         """PoC에서 검증한 디자인 보존 방식을 실행하고 COM 참조를 정리한다."""
         self._assert_thread()
-        source = presentation = destination = design = inserted_slide = None
+        source = presentation = destination = design = inserted_slide = shape = None
         designs = {}
         links = []
         mapping = {}
@@ -182,12 +182,20 @@ class PresentationManager:
                 if inserted != 1:
                     raise GenerationError("슬라이드 삽입 수가 예상과 다릅니다.")
                 inserted_slide = destination.Slides.Item(destination.Slides.Count)
+                original_shape_ids = {int(shape.Id) for shape in inserted_slide.Shapes}
                 design_key = (key, int(source.Design.Index))
                 if design_key not in designs:
                     designs[design_key] = destination.Designs.Clone(source.Design)
                 design = designs[design_key]
                 inserted_slide.Design = design
                 inserted_slide.CustomLayout = design.SlideMaster.CustomLayouts.Item(source.CustomLayout.Index)
+                # 레이아웃 적용이 원본에서 삭제한 제목·부제 자리 표시자를 다시 만들 수 있다.
+                # 삽입 직후에 없던 자리 표시자만 제거하고 원본 도형은 그대로 둔다.
+                for shape_index in range(int(inserted_slide.Shapes.Count), 0, -1):
+                    shape = inserted_slide.Shapes.Item(shape_index)
+                    if int(shape.Id) not in original_shape_ids and int(shape.Type) == 14:
+                        shape.Delete()
+                    shape = None
                 inserted_slide.FollowMasterBackground = source.FollowMasterBackground
                 LOGGER.info("슬라이드 삽입 %s #%s -> #%s", key, item.slide_index, number)
                 source = presentation = design = inserted_slide = None
@@ -211,7 +219,7 @@ class PresentationManager:
             LOGGER.exception("슬라이드 결합 실패")
             raise GenerationError("슬라이드를 결합하거나 저장하지 못했습니다. 실행 로그를 확인하세요.") from error
         finally:
-            source = presentation = design = inserted_slide = None
+            source = presentation = design = inserted_slide = shape = None
             designs.clear()
             if destination is not None:
                 try:

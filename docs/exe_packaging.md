@@ -1,5 +1,7 @@
 # Windows 단일 EXE
 
+2026-10-11 최신 수정본은 기존 경로인 `dist/PPTMerge.exe`이다. 그림 채우기 배경 복원과 레이아웃 적용으로 생기는 불필요한 자리 표시자 제거를 포함한다. 앞서 제공한 `dist/background-fix/PPTMerge.exe`도 같은 버전으로 맞췄다. [배경 보존](background_preservation.md)과 [실제 파일 병합 검증](merge_fidelity_validation.md)을 참고한다. 아래 기존 빌드 기록은 이전 버전에 관한 것이다.
+
 2026-10-09, PyInstaller 6.22.3 · hooks 2026.8로 Windows x64 EXE를 생성했다.
 
 최종 파일: `dist/PPTMerge.exe` (2026-10-10 검색창의 같은 줄 왼쪽 펼치기·접기 및 UI 스타일 정리 반영). 이전 배포 버전과 검증용 EXE 복사본을 삭제하고 최종 실행 파일 하나만 유지한다. 버튼·색상·글자·여백 정리와 이번 검증 범위는 [UI 스타일 정리](ui_style_refresh.md)를 참고한다.

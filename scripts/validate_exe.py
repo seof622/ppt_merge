@@ -16,7 +16,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="지정한 EXE의 실제 Windows 실행 검증")
     parser.add_argument("--exe", type=Path, default=ROOT / "dist/PPTMerge.exe",
                         help="검증할 EXE (기본: dist/PPTMerge.exe)")
-    executable = parser.parse_args().exe.resolve()
+    parser.add_argument("--sources", nargs=2, type=Path,
+                        default=[ROOT / "tests/fixtures/basic/A.pptx", ROOT / "tests/fixtures/basic/B.pptx"],
+                        help="4장 이상인 검증용 원본 2개 (기본: 기본 A·B 자료)")
+    args = parser.parse_args()
+    executable = args.exe.resolve()
     if not executable.is_file():
         raise SystemExit("먼저 scripts/build_exe.py를 실행하세요.")
     directory = Path(tempfile.mkdtemp(prefix="package_validation_", dir=ROOT / "output"))
@@ -35,7 +39,7 @@ def main() -> int:
     env["PATH"] = os.pathsep.join([str(windows / "System32"), str(windows)])
     started = time.perf_counter()
     command = [str(copied), "--package-check", str(directory),
-               str(ROOT / "tests/fixtures/basic/A.pptx"), str(ROOT / "tests/fixtures/basic/B.pptx")]
+               *(str(path.resolve()) for path in args.sources)]
     process = subprocess.Popen(command, cwd=working, env=env)
     print(f"진단 폴더: {directory}", flush=True)
     code = process.wait()
