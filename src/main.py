@@ -28,6 +28,7 @@ QToolButton#searchToggle:checked { background: #e7effc; }
 QToolButton:disabled { color: #a4afbf; background: transparent; border-color: transparent; }
 QFrame#sourcePanel, QFrame#originalsPanel { background: #ffffff; }
 QWidget#outputPanel { background: #ffffff; border-top: 1px solid #edf0f5; }
+QWidget#outputFooter { background: #ffffff; }
 QLabel#sectionTitle { color: #243247; font-size: 16px; font-weight: 600; }
 QLabel#mutedText, QLabel#rootPath, QLabel#statusText { color: #738198; font-size: 12px; }
 QLabel#emptyState { color: #738198; padding: 32px; font-size: 14px; }

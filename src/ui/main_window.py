@@ -11,7 +11,7 @@ from uuid import uuid4
 from PySide6.QtCore import QThread, QTimer, QSize, Qt, QUrl, Slot
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (QFileDialog, QLabel, QMainWindow, QProgressBar, QPushButton,
-                               QSizePolicy, QSplitter, QToolBar, QVBoxLayout, QMessageBox, QWidget)
+                               QSizePolicy, QSplitter, QToolBar, QToolButton, QVBoxLayout, QMessageBox, QWidget)
 
 from src.ppt.thumbnail_service import ThumbnailProgress, ThumbnailResult, ThumbnailService
 from src.ui.slide_grid import ElidedLabel, SlideGrid
@@ -31,6 +31,8 @@ class SourceState:
 
 
 class MainWindow(QMainWindow):
+    OUTPUT_DEFAULT_HEIGHT_RATIO = 0.30
+
     def __init__(self, cache_root: Path,
                  service_factory: Callable[[], ThumbnailService] | None = None,
                  generation_service_factory: Callable[[], PowerPointService] | None = None) -> None:
@@ -87,6 +89,9 @@ class MainWindow(QMainWindow):
         self.reload_action.triggered.connect(self.reload_selected)
         toolbar.addAction(self.reload_action)
         toolbar.addSeparator()
+        self.output_toggle_action = QAction("결과물 접기", self)
+        self.output_toggle_action.setIcon(icon("collapse"))
+        self.output_toggle_action.triggered.connect(self._toggle_output_panel)
         self.help_action = QAction("사용 안내", self)
         self.help_action.triggered.connect(self._show_help)
         toolbar.addAction(self.help_action)
@@ -122,6 +127,12 @@ class MainWindow(QMainWindow):
         drag_token = uuid4().hex
         self.slide_grid = SlideGrid(drag_token=drag_token)
         self.output_panel = OutputPanel(drag_token=drag_token)
+        self.output_toggle_button = QToolButton(self.output_panel)
+        self.output_toggle_button.setObjectName("outputToggleButton")
+        self.output_toggle_button.setDefaultAction(self.output_toggle_action)
+        self.output_toggle_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.output_toggle_button.setFixedSize(32, 32)
+        self.output_toggle_button.setAccessibleName("결과물 접기")
         self.slide_grid.add_requested.connect(self.output_panel.add_slides)
         splitter.addWidget(self.source_panel)
         splitter.addWidget(self.originals_panel)
@@ -133,14 +144,27 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 0)
         splitter.setStretchFactor(2, 1)
-        composer = QSplitter(Qt.Orientation.Vertical)
+        composer = self.composer = QSplitter(Qt.Orientation.Vertical)
         composer.setHandleWidth(4)
         composer.addWidget(splitter)
         composer.addWidget(self.output_panel)
-        composer.setSizes([590, 310])
         composer.setCollapsible(0, False)
-        composer.setCollapsible(1, False)
+        composer.setCollapsible(1, True)
+        self._output_height_mode = "default"
+        self._output_resize_timer = QTimer(self)
+        self._output_resize_timer.setSingleShot(True)
+        self._output_resize_timer.timeout.connect(self._restore_default_output_height)
+        composer.splitterMoved.connect(self._on_output_splitter_moved)
         layout.addWidget(composer, 1)
+        layout.addWidget(self.output_panel.footer_widget)
+        self.output_panel.header.insertWidget(0, self.output_toggle_button)
+        self.collapsed_output_toggle_button = QToolButton(self.output_panel.footer_widget)
+        self.collapsed_output_toggle_button.setObjectName("collapsedOutputToggleButton")
+        self.collapsed_output_toggle_button.setDefaultAction(self.output_toggle_action)
+        self.collapsed_output_toggle_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.collapsed_output_toggle_button.setFixedSize(36, 36)
+        self.collapsed_output_toggle_button.hide()
+        self.output_panel.footer.insertWidget(0, self.collapsed_output_toggle_button)
         self.generate_button = QPushButton("PPT 생성…")
         self.generate_button.setObjectName("primaryButton")
         self.generate_button.setIcon(icon("file", foreground="#ffffff"))
@@ -188,6 +212,49 @@ class MainWindow(QMainWindow):
             button.setAccessibleName(description)
             self.output_panel.footer.insertWidget(self.output_panel.footer.indexOf(self.generate_button), button)
         self._update_actions()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if self._output_height_mode == "default":
+            self._output_resize_timer.start(0)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if getattr(self, "_output_height_mode", None) == "default":
+            self._output_resize_timer.start(0)
+
+    def _restore_default_output_height(self) -> None:
+        if self._output_height_mode != "default":
+            return
+        available = max(0, self.composer.height() - self.composer.handleWidth())
+        height = round(self.height() * self.OUTPUT_DEFAULT_HEIGHT_RATIO)
+        self.composer.setSizes([max(0, available - height), height])
+        self._update_output_toggle()
+
+    def _toggle_output_panel(self) -> None:
+        self._output_resize_timer.stop()
+        if self.composer.sizes()[1] == 0:
+            self._output_height_mode = "default"
+            self._restore_default_output_height()
+        else:
+            self._output_height_mode = "collapsed"
+            self.composer.setSizes([self.composer.height(), 0])
+            self._update_output_toggle()
+
+    def _on_output_splitter_moved(self, position: int, index: int) -> None:
+        self._output_resize_timer.stop()
+        self._output_height_mode = "collapsed" if self.composer.sizes()[1] == 0 else "custom"
+        self._update_output_toggle()
+
+    def _update_output_toggle(self) -> None:
+        collapsed = self.composer.sizes()[1] == 0
+        label = "결과물 펼치기" if collapsed else "결과물 접기"
+        self.output_toggle_action.setText(label)
+        self.output_toggle_action.setIcon(icon("expand" if collapsed else "collapse"))
+        self.output_toggle_action.setToolTip(label)
+        self.output_toggle_button.setAccessibleName(label)
+        self.collapsed_output_toggle_button.setAccessibleName(label)
+        self.collapsed_output_toggle_button.setVisible(collapsed)
 
     @property
     def is_loading(self) -> bool:

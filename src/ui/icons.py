@@ -22,6 +22,8 @@ _PATHS = {
     "presentation": '<path d="M14 2H5v20h14V7z M14 2v5h5 M9 18v-7h3a2 2 0 0 1 0 4H9"/>',
     "help": '<circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 5 M12 17v.2"/>',
     "search": '<circle cx="10" cy="10" r="6"/><path d="M15 15l6 6"/>',
+    "collapse": '<path d="M5 8l7 7 7-7 M4 21h16"/>',
+    "expand": '<path d="M5 16l7-7 7 7 M4 3h16"/>',
 }
 
 

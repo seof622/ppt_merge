@@ -5,8 +5,8 @@ from uuid import uuid4
 
 from PySide6.QtCore import QModelIndex, QSize, Qt, Signal, QItemSelectionModel
 from PySide6.QtGui import QAction, QColor, QDrag, QKeySequence, QPainter, QPen
-from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel, QListView, QMenu,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel, QLayout, QListView, QMenu,
+                               QSizePolicy, QVBoxLayout, QWidget)
 
 from src.models.project_model import OutputSequence
 from src.models.slide_model import SlideItem
@@ -123,7 +123,6 @@ class OutputListView(QListView):
         self.setDropIndicatorShown(False)
         self.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setMinimumHeight(182)
 
     def startDrag(self, supported_actions) -> None:
         indexes = self.selectionModel().selectedIndexes()
@@ -207,17 +206,20 @@ class OutputPanel(QWidget):
         super().__init__(parent)
         self.setObjectName("outputPanel")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored)
         layout = QVBoxLayout(self)
+        # 헤더·버튼의 크기 힌트가 splitter의 최소 높이로 전파되지 않게 한다.
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
-        header = QHBoxLayout()
-        header.setSpacing(8)
+        self.header = QHBoxLayout()
+        self.header.setSpacing(8)
         heading = QLabel("결과물 미리보기")
         heading.setObjectName("sectionTitle")
         self.count = QLabel("0장 · 0장 선택")
         self.count.setObjectName("mutedText")
-        header.addWidget(heading)
-        header.addWidget(self.count, 1)
+        self.header.addWidget(heading)
+        self.header.addWidget(self.count, 1)
         self.clear_button = icon_button("clear", "출력 비우기", self)
         self.clear_button.clicked.connect(lambda: self.model.clear())
         tools = QHBoxLayout()
@@ -246,9 +248,9 @@ class OutputPanel(QWidget):
             action.changed.connect(lambda a=action, b=button: b.setEnabled(a.isEnabled()))
             self.actions[key] = action
             tools.addWidget(button)
-        header.addLayout(tools)
-        header.addWidget(self.clear_button)
-        layout.addLayout(header)
+        self.header.addLayout(tools)
+        self.header.addWidget(self.clear_button)
+        layout.addLayout(self.header)
         self.view = OutputListView(self)
         self.model = OutputListModel(self.view, drag_token)
         self.view.setModel(self.model)
@@ -262,10 +264,14 @@ class OutputPanel(QWidget):
         self.view.setAccessibleName("출력 슬라이드 순서")
         self.view.setToolTip("왼쪽부터 최종 순서 · Ctrl·Shift 선택 · 드래그로 순서 변경\n"
                              "Delete 삭제 · Ctrl+D 복제 · 목록은 앱 종료 시 초기화됩니다.")
-        self.footer = QHBoxLayout()
+        # 버튼 줄은 접히는 미리보기와 분리해 MainWindow가 하단에 배치한다.
+        self.footer_widget = QWidget(self)
+        self.footer_widget.setObjectName("outputFooter")
+        self.footer_widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.footer = QHBoxLayout(self.footer_widget)
+        self.footer.setContentsMargins(16, 8, 16, 12)
         self.footer.setSpacing(8)
         self.footer.addStretch(1)
-        layout.addLayout(self.footer)
         self._update_actions()
 
     @property
