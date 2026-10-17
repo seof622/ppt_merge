@@ -19,6 +19,7 @@ from src.ui.source_panel import SourcePanel
 from src.ui.icons import icon
 from src.ui.theme import ACCENT_HOVER, SURFACE
 from src.ui.output_panel import OutputPanel
+from src.utils.path_preferences import PathPreferences
 from src.workers.ppt_worker import PptWorker, GenerationWorker
 from src.ppt.powerpoint_service import (PowerPointService, GenerationPlan, GenerationProgress, GenerationResult)
 
@@ -60,6 +61,7 @@ class MainWindow(QMainWindow):
         self.last_generation_result: GenerationResult | None = None
         self._last_saved_result: GenerationResult | None = None
         self._browser_root: Path | None = None
+        self._path_preferences = PathPreferences(cache_root.parent / "settings.ini")
 
         toolbar = QToolBar("파일 작업")
         toolbar.setMovable(False)
@@ -127,6 +129,8 @@ class MainWindow(QMainWindow):
         splitter.setObjectName("workspaceShell")
         splitter.setHandleWidth(1)
         self.source_panel = SourcePanel()
+        if self._path_preferences.root_path:
+            self.source_panel.set_root(self._path_preferences.root_path)
         self.source_panel.setMinimumWidth(260)
         self.source_panel.setMaximumWidth(420)
         self.originals_panel = self.source_panel.originals_panel
@@ -193,9 +197,9 @@ class MainWindow(QMainWindow):
         self.source_panel.current_source_changed.connect(self._show_source)
         self.source_panel.selection_changed.connect(self._update_actions)
         self.source_panel.file_selected.connect(self._select_sidebar_file)
-        self.source_panel.root_changed.connect(self._root_changed)
         self.source_panel.search_finished.connect(self._sidebar_search_finished)
-        self._root_changed(str(self.source_panel.root_path))
+        self._root_changed(str(self.source_panel.root_path), remember=False)
+        self.source_panel.root_changed.connect(self._root_changed)
 
         status = self.statusBar()
         status.setSizeGripEnabled(True)
@@ -315,7 +319,8 @@ class MainWindow(QMainWindow):
         if self.is_busy or self._closing:
             return
         filename, _ = QFileDialog.getSaveFileName(
-            self, "새 PowerPoint 저장", "result.pptx", "PowerPoint (*.pptx)",
+            self, "새 PowerPoint 저장",
+            self._path_preferences.output_path(self.source_panel.root_path), "PowerPoint (*.pptx)",
             options=QFileDialog.Option.DontConfirmOverwrite)
         if not filename:
             return
@@ -382,6 +387,7 @@ class MainWindow(QMainWindow):
     def _on_generated(self, result: GenerationResult) -> None:
         self.last_generation_result = result
         self._last_saved_result = result
+        self._path_preferences.remember_output(result.output_path)
         self.open_file_button.setToolTip(f"{result.output_path}\n다시 생성하려면 PowerPoint를 닫아 주세요.")
         self.open_output_button.setToolTip(f"{Path(result.output_path).name}\n{Path(result.output_path).parent}")
         self._generation_outcome = f"저장 완료 · {result.slide_count}장 · {result.output_path}"
@@ -454,10 +460,12 @@ class MainWindow(QMainWindow):
         if directory:
             self.source_panel.set_root(directory)
 
-    def _root_changed(self, path: str) -> None:
+    def _root_changed(self, path: str, *, remember: bool = True) -> None:
         self._browser_root = Path(path)
         self.root_label.setText(path)
         self.root_label.setToolTip(path)
+        if remember:
+            self._path_preferences.remember_root(path)
 
     def _select_sidebar_file(self, path: str) -> None:
         if self._closing or self.is_generating:

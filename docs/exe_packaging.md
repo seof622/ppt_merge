@@ -1,5 +1,7 @@
 # Windows 단일 EXE
 
+2026-10-17: 마지막 루트 폴더와 생성에 성공한 PPT의 전체 저장 경로·파일명을 기억하도록 `dist/PPTMerge.exe`를 갱신했다. 설정은 `%LOCALAPPDATA%/PPTMerge/settings.ini`에 저장해 EXE 교체와 앱 재실행 후에도 유지한다. 자세한 동작과 검증은 [경로 기억 기능](path_preferences.md)을 참고한다. 아래는 이전 빌드 기록이다.
+
 2026-10-11 최신 수정본은 기존 경로인 `dist/PPTMerge.exe`이다. 그림 채우기 배경 복원과 레이아웃 적용으로 생기는 불필요한 자리 표시자 제거를 포함한다. 앞서 제공한 `dist/background-fix/PPTMerge.exe`도 같은 버전으로 맞췄다. [배경 보존](background_preservation.md)과 [실제 파일 병합 검증](merge_fidelity_validation.md)을 참고한다. 아래 기존 빌드 기록은 이전 버전에 관한 것이다.
 
 2026-10-09, PyInstaller 6.22.3 · hooks 2026.8로 Windows x64 EXE를 생성했다.
