@@ -4,15 +4,16 @@ from collections.abc import Callable, Iterable
 from uuid import uuid4
 
 from PySide6.QtCore import QModelIndex, QSize, Qt, Signal, QItemSelectionModel
-from PySide6.QtGui import QAction, QColor, QDrag, QKeySequence, QPainter, QPen
+from PySide6.QtGui import QAction, QColor, QDrag, QKeySequence, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel, QLayout, QListView, QMenu,
-                               QSizePolicy, QVBoxLayout, QWidget)
+                               QSizePolicy, QToolButton, QVBoxLayout, QWidget)
 
 from src.models.project_model import OutputSequence
 from src.models.slide_model import SlideItem
 from src.ui.slide_grid import SlideListModel
 from src.ui.slide_mime import make_slide_mime, read_slide_mime
 from src.ui.icons import icon, icon_button
+from src.ui.theme import ACCENT
 
 
 class OutputListModel(SlideListModel):
@@ -21,6 +22,7 @@ class OutputListModel(SlideListModel):
 
     def __init__(self, parent=None, drag_token: str = "") -> None:
         super().__init__(parent, drag_token)
+        self.card_size = QSize(196, 156)
         self.sequence = OutputSequence()
         self.origin = uuid4().hex
         self.revision = 0
@@ -29,11 +31,13 @@ class OutputListModel(SlideListModel):
         if index.isValid() and 0 <= index.row() < self.rowCount():
             slide = self.slides[index.row()]
             if role == Qt.ItemDataRole.DisplayRole:
+                if self.card_size.height() < 156:
+                    return f"{index.row() + 1} · #{slide.slide_index} · {slide.source_file_name}"
                 return f"{index.row() + 1} · {slide.source_file_name}\n#{slide.slide_index}"
             if role == Qt.ItemDataRole.ToolTipRole:
                 return f"출력 {index.row() + 1}번\n{slide.source_file}\n원본 슬라이드 {slide.slide_index}\n{slide.title or ''}"
             if role == Qt.ItemDataRole.SizeHintRole:
-                return QSize(196, 156)
+                return self.card_size
         return super().data(index, role)
 
     def flags(self, index):
@@ -124,6 +128,19 @@ class OutputListView(QListView):
         self.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        model = self.model()
+        if model is None:
+            return
+        # 작은 창에서도 이미지 아래의 파일명·원본 번호가 잘리지 않게 한다.
+        height = max(82, min(156, self.viewport().height() - 2 * self.spacing() - 2))
+        size = QSize(196, height)
+        if model.card_size != size:
+            model.card_size = size
+            self.setIconSize(QSize(160, max(24, min(90, height - 42))))
+            self.doItemsLayout()
+
     def startDrag(self, supported_actions) -> None:
         indexes = self.selectionModel().selectedIndexes()
         if not indexes:
@@ -185,7 +202,7 @@ class OutputListView(QListView):
         super().paintEvent(event)
         painter = QPainter(self.viewport())
         if self.model().rowCount() == 0:
-            painter.setPen(QColor("#64748b"))
+            painter.setPen(self.palette().color(QPalette.ColorRole.PlaceholderText))
             painter.drawText(self.viewport().rect(), Qt.AlignmentFlag.AlignCenter,
                              "슬라이드를 끌어 놓으세요")
         if self._insert_row is not None:
@@ -196,7 +213,7 @@ class OutputListView(QListView):
                 x = self.visualRect(self.model().index(row - 1, 0)).right() + 4
             else:
                 x = self.visualRect(self.model().index(row, 0)).left() - 4
-            painter.setPen(QPen(QColor("#2563eb"), 3))
+            painter.setPen(QPen(QColor(ACCENT), 3))
             painter.drawLine(max(2, x), 8, max(2, x), min(165, self.viewport().height() - 8))
         painter.end()
 
@@ -225,6 +242,7 @@ class OutputPanel(QWidget):
         tools = QHBoxLayout()
         tools.setSpacing(4)
         self.actions: dict[str, QAction] = {}
+        self.tool_buttons: dict[str, QToolButton] = {}
         commands = (("remove", "선택 삭제", "Delete", self.remove_selected),
                     ("duplicate", "복제", "Ctrl+D", self.duplicate_selected),
                     ("up", "앞으로", "Alt+Up", lambda: self.step_selected(-1)),
@@ -247,7 +265,17 @@ class OutputPanel(QWidget):
             button.clicked.connect(action.trigger)
             action.changed.connect(lambda a=action, b=button: b.setEnabled(a.isEnabled()))
             self.actions[key] = action
+            self.tool_buttons[key] = button
             tools.addWidget(button)
+        self.more_button = icon_button("more", "순서 이동 메뉴", self)
+        self.more_button.setObjectName("outputMore")
+        move_menu = QMenu(self.more_button)
+        for key in ("up", "down", "first", "last"):
+            move_menu.addAction(self.actions[key])
+        self.more_button.setMenu(move_menu)
+        self.more_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.more_button.hide()
+        tools.addWidget(self.more_button)
         self.header.addLayout(tools)
         self.header.addWidget(self.clear_button)
         layout.addLayout(self.header)
@@ -273,6 +301,15 @@ class OutputPanel(QWidget):
         self.footer.setSpacing(8)
         self.footer.addStretch(1)
         self._update_actions()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if not hasattr(self, "more_button"):
+            return
+        compact = self.width() < 680
+        for key in ("up", "down", "first", "last"):
+            self.tool_buttons[key].setVisible(not compact)
+        self.more_button.setVisible(compact)
 
     @property
     def output_slides(self) -> list[SlideItem]:

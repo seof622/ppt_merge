@@ -5,6 +5,8 @@ from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QToolButton, QWidget
 
+from src.ui.theme import ACCENT, DISABLED_TEXT, MUTED
+
 
 _PATHS = {
     "add-file": '<path d="M14 2H5v20h14V7z M14 2v5h5 M8 14h8 M12 10v8"/>',
@@ -22,6 +24,7 @@ _PATHS = {
     "presentation": '<path d="M14 2H5v20h14V7z M14 2v5h5 M9 18v-7h3a2 2 0 0 1 0 4H9"/>',
     "help": '<circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 5 M12 17v.2"/>',
     "search": '<circle cx="10" cy="10" r="6"/><path d="M15 15l6 6"/>',
+    "more": '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
     "collapse": '<path d="M5 8l7 7 7-7 M4 21h16"/>',
     "expand": '<path d="M5 16l7-7 7 7 M4 3h16"/>',
 }
@@ -29,14 +32,14 @@ _PATHS = {
 
 def icon(name: str, foreground: str | None = None) -> QIcon:
     result = QIcon()
-    for mode, color in ((QIcon.Mode.Normal, "#475569"),
-                        (QIcon.Mode.Disabled, "#94a3b8"),
-                        (QIcon.Mode.Active, "#2563eb")):
+    for mode, color in ((QIcon.Mode.Normal, MUTED),
+                        (QIcon.Mode.Disabled, DISABLED_TEXT),
+                        (QIcon.Mode.Active, ACCENT)):
         if mode != QIcon.Mode.Disabled:
             if foreground is not None:
                 color = foreground
             elif name == "presentation":
-                color = "#c43e1c"
+                color = "#a56942"
         svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
                f'fill="none" stroke="{color}" stroke-width="1.8" '
                f'stroke-linecap="round" stroke-linejoin="round">{_PATHS[name]}</svg>')

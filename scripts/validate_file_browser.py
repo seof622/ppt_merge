@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEventLoop, QTimer, Qt
+from PySide6.QtCore import QEventLoop, QPoint, QTimer, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QStyle, QToolButton
 
@@ -109,8 +109,12 @@ def main() -> None:
         assert window.output_panel.view.width() > 0
         assert window.generate_button.isVisible()
         assert panel.isVisible() and panel.originals_panel.isVisible()
-        assert panel.geometry().right() < panel.originals_panel.geometry().left()
-        assert panel.originals_panel.geometry().right() < window.slide_grid.geometry().left()
+        def window_rect(widget):
+            rect = widget.rect()
+            rect.moveTopLeft(widget.mapTo(window, QPoint(0, 0)))
+            return rect
+        assert window_rect(panel).right() < window_rect(panel.originals_panel).left()
+        assert window_rect(panel.originals_panel).right() < window_rect(window.slide_grid).left()
     assert app.activeModalWidget() is None
     report["separate_originals_card"] = True
     panel.search.setText("advanced")
