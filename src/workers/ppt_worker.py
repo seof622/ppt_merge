@@ -1,6 +1,7 @@
 """QThread에서 썸네일 서비스를 호출하고 일반 데이터만 화면에 전달한다."""
 
 from collections.abc import Callable
+from dataclasses import replace
 import logging
 from pathlib import Path
 import threading
@@ -9,6 +10,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 
 from src.ppt.errors import OperationCancelled, PowerPointError
 from src.ppt.thumbnail_service import ThumbnailService
+from src.utils.slide_text import read_slide_texts
 
 LOGGER = logging.getLogger("ppt_merge.worker")
 
@@ -49,6 +51,10 @@ class PptWorker(QObject):
                     result = service.load(Path(path),
                                           progress=lambda event: self.progress.emit(path, event),
                                           cancel=self._cancel.is_set)
+                    result = replace(result, search_text=read_slide_texts(path, self._cancel.is_set))
+                    if self._cancel.is_set():
+                        self.cancelled.emit(path)
+                        break
                     self.loaded.emit(path, result)
                 except OperationCancelled:
                     self.cancelled.emit(path)

@@ -61,6 +61,8 @@ class SourceTreeModel(QSortFilterProxyModel):
 
     def source_icon(self, path: str) -> QIcon:
         status = self.states.get(source_key(path))
+        if status and status[2] == 'ready':
+            return icon('presentation')
         icons = {"ready": QStyle.StandardPixmap.SP_DialogApplyButton,
                  "loading": QStyle.StandardPixmap.SP_BrowserReload,
                  "failed": QStyle.StandardPixmap.SP_MessageBoxCritical,

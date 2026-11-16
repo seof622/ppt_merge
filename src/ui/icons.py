@@ -9,6 +9,8 @@ from src.ui.theme import ACCENT, DISABLED_TEXT, MUTED
 
 
 _PATHS = {
+    "undo": '<path d="M8 4L3 9l5 5 M3 9h10a7 7 0 0 1 0 14"/>',
+    "redo": '<path d="M16 4l5 5-5 5 M21 9H11a7 7 0 0 0 0 14"/>',
     "add-file": '<path d="M14 2H5v20h14V7z M14 2v5h5 M8 14h8 M12 10v8"/>',
     "remove": '<path d="M3 6h18 M9 6V3h6v3 M5 6l1 15h12l1-15 M10 10v7 M14 10v7"/>',
     "clear": '<path d="M4 5h9 M4 11h6 M4 17h6 M15 11l6 6 M21 11l-6 6"/>',

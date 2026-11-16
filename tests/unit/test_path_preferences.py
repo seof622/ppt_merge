@@ -9,6 +9,7 @@ from unittest.mock import patch
 from PySide6.QtWidgets import QMessageBox
 
 from src.ui.main_window import MainWindow
+from src.models.slide_model import SlideItem
 from src.utils.path_preferences import PathPreferences
 import test_generation_ui as generation_fixture
 import test_ui as ui_fixture
@@ -26,8 +27,11 @@ class PathPreferencesTests(unittest.TestCase):
         self.window = MainWindow(self.root / "cache", self.factory)
         self.window.show()
         self.app.processEvents()
+        ui_fixture.wait_until(lambda: not self.window.is_loading and not self.window._restoring)
 
     def dialog_default(self):
+        if not self.window.output_panel.output_slides:
+            self.window.output_panel.add_slides([SlideItem(str(self.a), self.a.name, 1, 256)])
         with patch("src.ui.main_window.QFileDialog.getSaveFileName", return_value=("", "")) as dialog:
             self.window.choose_output()
         return dialog.call_args.args[2]

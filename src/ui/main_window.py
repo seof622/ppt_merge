@@ -10,8 +10,9 @@ from uuid import uuid4
 
 from PySide6.QtCore import QThread, QTimer, QSize, Qt, QUrl, Slot
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
-from PySide6.QtWidgets import (QFileDialog, QLabel, QMainWindow, QProgressBar, QPushButton,
-                               QSizePolicy, QSplitter, QToolBar, QToolButton, QVBoxLayout, QMessageBox, QWidget)
+from PySide6.QtWidgets import (QButtonGroup, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMenu,
+                               QProgressBar, QPushButton, QSizePolicy, QSplitter, QToolBar,
+                               QToolButton, QVBoxLayout, QMessageBox, QWidget)
 
 from src.ppt.thumbnail_service import ThumbnailProgress, ThumbnailResult, ThumbnailService
 from src.ui.slide_grid import ElidedLabel, SlideGrid
@@ -20,6 +21,7 @@ from src.ui.icons import icon
 from src.ui.theme import ACCENT_HOVER, SURFACE
 from src.ui.output_panel import OutputPanel
 from src.utils.path_preferences import PathPreferences
+from src.utils.workspace_store import WorkspaceStore
 from src.workers.ppt_worker import PptWorker, GenerationWorker
 from src.ppt.powerpoint_service import (PowerPointService, GenerationPlan, GenerationProgress, GenerationResult)
 
@@ -33,7 +35,6 @@ class SourceState:
 
 
 class MainWindow(QMainWindow):
-    OUTPUT_DEFAULT_HEIGHT_RATIO = 0.30
 
     def __init__(self, cache_root: Path,
                  service_factory: Callable[[], ThumbnailService] | None = None,
@@ -63,217 +64,302 @@ class MainWindow(QMainWindow):
         self._browser_root: Path | None = None
         self._path_preferences = PathPreferences(cache_root.parent / "settings.ini")
 
-        toolbar = QToolBar("파일 작업")
+        self._workspace_store = WorkspaceStore(cache_root.parent / "workspace.json")
+        self._restoring = False
+        self._restore_incomplete = False
+        self._restore_slides = []
+        self._view_mode = 'both'
+        self._wide_mode = 'both'
+        self._compact = False
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(350)
+        self._save_timer.timeout.connect(self._save_workspace)
+
+        toolbar = self.toolbar = QToolBar('주요 작업')
         toolbar.setMovable(False)
-        toolbar.setObjectName("mainToolbar")
-        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        toolbar.setIconSize(QSize(20, 20))
+        toolbar.setObjectName('mainToolbar')
+        toolbar.setIconSize(QSize(18, 18))
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.addToolBar(toolbar)
-        brand = QLabel("PPT Merge")
-        brand.setObjectName("appBrand")
+        brand = QLabel('PPT Merge')
+        brand.setObjectName('appBrand')
         toolbar.addWidget(brand)
         toolbar.addSeparator()
-        self.add_action = QAction("최상위 폴더 선택", self)
-        self.add_action.setShortcut(QKeySequence.StandardKey.Open)
+        self.file_add_action = QAction(icon('add-file'), 'PPT 추가', self)
+        self.file_add_action.setShortcut(QKeySequence.StandardKey.Open)
+        self.file_add_action.triggered.connect(self.choose_presentations)
+        toolbar.addAction(self.file_add_action)
+        self.add_action = QAction(icon('folder'), '폴더에서 찾기', self)
+        self.add_action.setShortcut(QKeySequence('Ctrl+Shift+O'))
         self.add_action.triggered.connect(self.choose_files)
         toolbar.addAction(self.add_action)
-        self.root_label = ElidedLabel("")
-        self.root_label.setObjectName("rootPath")
-        self.root_label.setFixedWidth(360)
-        self.root_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
-        self.root_label.setAccessibleName("최상위 폴더 경로")
-        toolbar.addWidget(self.root_label)
-        toolbar.addSeparator()
-        self.remove_action = QAction("선택 파일 제거", self)
+        self.remove_action = QAction(icon('remove'), '목록에서 제거', self)
         self.remove_action.triggered.connect(self.remove_selected)
-        toolbar.addAction(self.remove_action)
-        self.clear_action = QAction("파일 목록 비우기", self)
+        self.clear_action = QAction(icon('clear'), '자료 목록 비우기', self)
         self.clear_action.triggered.connect(self.clear_sources)
-        toolbar.addAction(self.clear_action)
-        toolbar.addSeparator()
-        self.reload_action = QAction("다시 읽기", self)
-        self.reload_action.setShortcut(QKeySequence("Ctrl+R"))
+        self.reload_action = QAction(icon('reload'), '다시 읽기', self)
+        self.reload_action.setShortcut(QKeySequence('Ctrl+R'))
         self.reload_action.triggered.connect(self.reload_selected)
-        toolbar.addAction(self.reload_action)
-        toolbar.addSeparator()
-        self.output_toggle_action = QAction("결과물 접기", self)
-        self.output_toggle_action.setIcon(icon("collapse"))
-        self.output_toggle_action.triggered.connect(self._toggle_output_panel)
-        self.help_action = QAction("사용 안내", self)
+        self.addAction(self.reload_action)
+        self.help_action = QAction(icon('help'), '사용 안내', self)
         self.help_action.triggered.connect(self._show_help)
-        toolbar.addAction(self.help_action)
-        for action, name in ((self.add_action, "folder"), (self.remove_action, "remove"),
-                             (self.clear_action, "clear"), (self.reload_action, "reload"),
-                             (self.help_action, "help")):
-            action.setIcon(icon(name))
-            shortcut = action.shortcut().toString()
-            action.setToolTip(action.text() + (f" ({shortcut})" if shortcut else ""))
-            toolbar.widgetForAction(action).setAccessibleName(action.text())
-            toolbar.widgetForAction(action).setFixedSize(36, 36)
-        toolbar.widgetForAction(self.add_action).setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.add_action.setIconText("폴더 선택")
-        toolbar.widgetForAction(self.add_action).setFixedWidth(112)
 
         container = QWidget()
-        container.setObjectName("appShell")
-        container.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        container.setObjectName('appShell')
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(14, 0, 14, 8)
+        layout.setContentsMargins(16, 0, 16, 8)
         layout.setSpacing(0)
         self.notice = QLabel()
-        self.notice.setObjectName("notice")
+        self.notice.setObjectName('notice')
         self.notice.setWordWrap(True)
         self.notice.hide()
         layout.addWidget(self.notice)
         splitter = self.sidebar_splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setObjectName("workspaceShell")
+        splitter.setObjectName('workspaceShell')
         splitter.setHandleWidth(1)
         self.source_panel = SourcePanel()
         if self._path_preferences.root_path:
             self.source_panel.set_root(self._path_preferences.root_path)
-        self.source_panel.setMinimumWidth(260)
-        self.source_panel.setMaximumWidth(420)
+        self.source_panel.setMinimumWidth(250)
+        self.source_panel.setMaximumWidth(360)
         self.originals_panel = self.source_panel.originals_panel
-        self.originals_panel.setMinimumWidth(200)
-        self.originals_panel.setMaximumWidth(420)
+        self.root_label = ElidedLabel('')
+        self.root_label.setObjectName('rootPath')
+        self.root_label.setAccessibleName('최상위 폴더 경로')
+        self.source_panel.browser_page.layout().insertWidget(0, self.root_label)
+        source_tools = QHBoxLayout()
+        source_tools.addWidget(QLabel('자료 관리'))
+        source_tools.addStretch()
+        self.source_menu_button = QToolButton()
+        self.source_menu_button.setIcon(icon('more'))
+        self.source_menu_button.setToolTip('자료 제거·다시 읽기·도움말')
+        self.source_menu_button.setAccessibleName('자료 관리 메뉴')
+        source_menu = QMenu(self.source_menu_button)
+        source_menu.addActions([self.reload_action, self.remove_action, self.clear_action])
+        source_menu.addSeparator()
+        source_menu.addAction(self.help_action)
+        self.source_menu_button.setMenu(source_menu)
+        self.source_menu_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        source_tools.addWidget(self.source_menu_button)
+        self.source_panel.layout().addLayout(source_tools)
+
         drag_token = uuid4().hex
         self.slide_grid = SlideGrid(drag_token=drag_token)
         self.output_panel = OutputPanel(drag_token=drag_token)
-        self.output_toggle_button = QToolButton(self.output_panel)
-        self.output_toggle_button.setObjectName("outputToggleButton")
-        self.output_toggle_button.setDefaultAction(self.output_toggle_action)
-        self.output_toggle_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        self.output_toggle_button.setFixedSize(32, 32)
-        self.output_toggle_button.setAccessibleName("결과물 접기")
         self.slide_grid.add_requested.connect(self.output_panel.add_slides)
+        stack = self.output_panel.model.undo_stack
+        self.undo_action = stack.createUndoAction(self, '실행 취소')
+        self.undo_action.setIcon(icon('undo'))
+        self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        self.redo_action = stack.createRedoAction(self, '다시 실행')
+        self.redo_action.setIcon(icon('redo'))
+        self.redo_action.setShortcuts([QKeySequence('Ctrl+Y'), QKeySequence('Ctrl+Shift+Z')])
+        toolbar.addSeparator()
+        toolbar.addActions([self.undo_action, self.redo_action])
+        for action in (self.undo_action, self.redo_action):
+            button = toolbar.widgetForAction(action)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+            button.setFixedSize(36, 36)
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(spacer)
+        self.generate_button = QPushButton('PPT로 저장')
+        self.generate_button.setObjectName('primaryButton')
+        self.generate_button.setIcon(icon('file', foreground=SURFACE))
+        self.generate_button.setFixedHeight(38)
+        self.generate_button.clicked.connect(self.choose_output)
+        toolbar.addWidget(self.generate_button)
+        self.save_action = QAction(self)
+        self.save_action.setShortcut(QKeySequence.StandardKey.Save)
+        self.save_action.triggered.connect(self.choose_output)
+        self.addAction(self.save_action)
+
         self.workspace = QWidget()
-        self.workspace.setObjectName("workspace")
+        self.workspace.setObjectName('workspace')
         self.workspace.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         workspace_layout = QVBoxLayout(self.workspace)
         workspace_layout.setContentsMargins(0, 0, 0, 0)
         workspace_layout.setSpacing(0)
+        mode_bar = QHBoxLayout()
+        mode_bar.setContentsMargins(20, 12, 20, 8)
+        self.mode_group = QButtonGroup(self)
+        self.mode_buttons = {}
+        for mode, caption in (('both', '나란히 보기'), ('source', '원본 보기'), ('result', '결과 편집 · 0장')):
+            button = QPushButton(caption)
+            button.setCheckable(True)
+            button.setObjectName('viewModeButton')
+            button.setChecked(mode == 'both')
+            self.mode_group.addButton(button)
+            self.mode_buttons[mode] = button
+            button.clicked.connect(lambda checked=False, m=mode: self.set_workspace_mode(m))
+            mode_bar.addWidget(button)
+        mode_bar.addStretch()
+        workspace_layout.addLayout(mode_bar)
+        self.composer = QSplitter(Qt.Orientation.Horizontal)
+        self.composer.setHandleWidth(1)
+        self.composer.addWidget(self.slide_grid)
+        self.composer.addWidget(self.output_panel)
+        self.composer.setCollapsible(0, False)
+        self.composer.setCollapsible(1, False)
+        self.composer.setSizes([660, 640])
+        self.composer.setStretchFactor(0, 1)
+        self.composer.setStretchFactor(1, 1)
+        workspace_layout.addWidget(self.composer, 1)
+        workspace_layout.addWidget(self.output_panel.footer_widget)
         splitter.addWidget(self.source_panel)
-        splitter.addWidget(self.originals_panel)
         splitter.addWidget(self.workspace)
-        splitter.setSizes([270, 230, 1100])
+        splitter.setSizes([270, 1300])
         splitter.setCollapsible(0, False)
         splitter.setCollapsible(1, False)
-        splitter.setCollapsible(2, False)
         splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 0)
-        splitter.setStretchFactor(2, 1)
-        composer = self.composer = QSplitter(Qt.Orientation.Vertical)
-        composer.setHandleWidth(1)
-        composer.addWidget(self.slide_grid)
-        composer.addWidget(self.output_panel)
-        composer.setCollapsible(0, False)
-        composer.setCollapsible(1, True)
-        self._output_height_mode = "default"
-        self._output_resize_timer = QTimer(self)
-        self._output_resize_timer.setSingleShot(True)
-        self._output_resize_timer.timeout.connect(self._restore_default_output_height)
-        composer.splitterMoved.connect(self._on_output_splitter_moved)
-        workspace_layout.addWidget(composer, 1)
-        workspace_layout.addWidget(self.output_panel.footer_widget)
+        splitter.setStretchFactor(1, 1)
         layout.addWidget(splitter, 1)
-        self.output_panel.header.insertWidget(0, self.output_toggle_button)
-        self.collapsed_output_toggle_button = QToolButton(self.output_panel.footer_widget)
-        self.collapsed_output_toggle_button.setObjectName("collapsedOutputToggleButton")
-        self.collapsed_output_toggle_button.setDefaultAction(self.output_toggle_action)
-        self.collapsed_output_toggle_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        self.collapsed_output_toggle_button.setFixedSize(36, 36)
-        self.collapsed_output_toggle_button.hide()
-        self.output_panel.footer.insertWidget(0, self.collapsed_output_toggle_button)
-        self.generate_button = QPushButton("PPT 생성…")
-        self.generate_button.setObjectName("primaryButton")
-        self.generate_button.setIcon(icon("file", foreground=SURFACE))
-        self.generate_button.setIconSize(QSize(20, 20))
-        self.generate_button.setFixedHeight(36)
-        self.generate_button.clicked.connect(self.choose_output)
-        self.output_panel.footer.addWidget(self.generate_button)
-        self.output_panel.model.modelReset.connect(self._update_actions)
-        self.output_panel.model.feedback.connect(self._on_output_feedback)
+
+        self.output_toggle_action = QAction('결과 크게 보기', self)
+        self.output_toggle_action.triggered.connect(self._toggle_output_panel)
+        self.output_toggle_button = QToolButton(self.output_panel)
+        self.output_toggle_button.setDefaultAction(self.output_toggle_action)
+        self.output_toggle_button.setIcon(icon('expand'))
+        self.output_toggle_button.setFixedSize(32, 32)
+        self.output_toggle_button.setAccessibleName('결과 크게 보기')
+        self.output_panel.header.addWidget(self.output_toggle_button)
+        self.collapsed_output_toggle_button = self.mode_buttons['result']
+        self.workspace_status = ElidedLabel('작업 목록을 자동으로 저장합니다')
+        self.workspace_status.setObjectName('mutedText')
+        self.output_panel.footer.insertWidget(0, self.workspace_status, 1)
+        self.open_file_button = QPushButton('파일 열기')
+        self.open_file_button.clicked.connect(self._open_output_file)
+        self.open_output_button = QPushButton('폴더 열기')
+        self.open_output_button.clicked.connect(self._open_output_folder)
+        for button, name in ((self.open_file_button, 'file'), (self.open_output_button, 'folder')):
+            button.setObjectName('resultAction')
+            button.setIcon(icon(name))
+            button.setFixedHeight(36)
+            button.hide()
+            self.output_panel.footer.addWidget(button)
         self.setCentralWidget(container)
+
+        status = self.statusBar()
+        status.setSizeGripEnabled(True)
+        self.status_text = ElidedLabel('PPT를 추가하거나 파일을 끌어 놓으세요')
+        self.status_text.setObjectName('statusText')
+        status.addWidget(self.status_text, 1)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setFixedWidth(200)
+        self.progress_bar.hide()
+        status.addPermanentWidget(self.progress_bar)
+        self.cancel_button = QPushButton('취소')
+        self.cancel_button.clicked.connect(self.cancel_loading)
+        self.cancel_button.hide()
+        status.addPermanentWidget(self.cancel_button)
         self.source_panel.current_source_changed.connect(self._show_source)
         self.source_panel.selection_changed.connect(self._update_actions)
         self.source_panel.file_selected.connect(self._select_sidebar_file)
         self.source_panel.search_finished.connect(self._sidebar_search_finished)
         self._root_changed(str(self.source_panel.root_path), remember=False)
         self.source_panel.root_changed.connect(self._root_changed)
+        self.output_panel.model.modelReset.connect(self._output_changed)
+        self.output_panel.model.feedback.connect(self._on_output_feedback)
+        self._update_actions()
+        QTimer.singleShot(0, self._restore_workspace)
 
-        status = self.statusBar()
-        status.setSizeGripEnabled(True)
-        self.status_text = ElidedLabel("PPTX · PPTM")
-        self.status_text.setObjectName("statusText")
-        status.addWidget(self.status_text, 1)
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setFixedWidth(200)
-        self.progress_bar.hide()
-        status.addPermanentWidget(self.progress_bar)
-        self.cancel_button = QPushButton("취소")
-        self.cancel_button.setIcon(icon("clear"))
-        self.cancel_button.clicked.connect(self.cancel_loading)
-        self.cancel_button.hide()
-        status.addPermanentWidget(self.cancel_button)
-        self.open_file_button = QPushButton("파일 열기")
-        self.open_file_button.clicked.connect(self._open_output_file)
-        self.open_file_button.hide()
-        self.open_output_button = QPushButton("폴더 열기")
-        self.open_output_button.clicked.connect(self._open_output_folder)
-        self.open_output_button.hide()
-        for button, name in ((self.open_file_button, "file"), (self.open_output_button, "folder")):
-            button.setObjectName("resultAction")
-            button.setFixedHeight(36)
-            description = "생성한 PPT 파일 열기" if name == "file" else "생성한 PPT의 저장 폴더 열기"
-            button.setIcon(icon(name, foreground=ACCENT_HOVER))
-            button.setIconSize(QSize(20, 20))
-            button.setToolTip(description)
-            button.setAccessibleName(description)
-            self.output_panel.footer.insertWidget(self.output_panel.footer.indexOf(self.generate_button), button)
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._apply_workspace_layout()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, 'mode_buttons'):
+            self._apply_workspace_layout()
+
+    def set_workspace_mode(self, mode):
+        self._view_mode = mode
+        if not self._compact:
+            self._wide_mode = mode
+        self._apply_workspace_layout()
+
+    def _apply_workspace_layout(self):
+        compact = self.width() < 1320
+        if compact != self._compact:
+            if compact:
+                self._wide_mode = self._view_mode
+                self._view_mode = 'source' if self._view_mode == 'both' else self._view_mode
+            else:
+                self._view_mode = self._wide_mode
+            self._compact = compact
+        self.mode_buttons['both'].setVisible(not compact)
+        self.mode_buttons[self._view_mode].setChecked(True)
+        self.slide_grid.setVisible(self._view_mode != 'result')
+        self.output_panel.setVisible(self._view_mode != 'source')
+        self.output_toggle_action.setText('나란히 보기' if self._view_mode == 'result' and not compact else '원본 보기' if self._view_mode == 'result' else '결과 크게 보기')
+
+    def _toggle_output_panel(self):
+        self.set_workspace_mode(('source' if self._compact else 'both') if self._view_mode == 'result' else 'result')
+
+    def _output_changed(self):
+        slides = self.output_panel.output_slides
+        self.mode_buttons['result'].setText(f'결과 편집 · {len(slides)}장')
+        self.slide_grid.set_usage(slides)
+        self._schedule_workspace_save()
         self._update_actions()
 
-    def showEvent(self, event) -> None:
-        super().showEvent(event)
-        if self._output_height_mode == "default":
-            self._output_resize_timer.start(0)
+    def _schedule_workspace_save(self):
+        if not self._restoring:
+            self._restore_incomplete = False
+            self._save_timer.start()
 
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        if getattr(self, "_output_height_mode", None) == "default":
-            self._output_resize_timer.start(0)
-
-    def _restore_default_output_height(self) -> None:
-        if self._output_height_mode != "default":
+    def _save_workspace(self):
+        if self._restoring or self._restore_incomplete:
             return
-        available = max(0, self.composer.height() - self.composer.handleWidth())
-        height = round(self.height() * self.OUTPUT_DEFAULT_HEIGHT_RATIO)
-        self.composer.setSizes([max(0, available - height), height])
-        self._update_output_toggle()
+        saved = self._workspace_store.save((s.path for s in self._sources.values()),
+                                            self.output_panel.output_slides)
+        self.workspace_status.setText('작업 자동 저장됨' if saved else '작업 목록을 저장하지 못했습니다')
 
-    def _toggle_output_panel(self) -> None:
-        self._output_resize_timer.stop()
-        if self.composer.sizes()[1] == 0:
-            self._output_height_mode = "default"
-            self._restore_default_output_height()
+    def _restore_workspace(self):
+        if self._closing or self._sources or self.output_panel.output_slides:
+            return
+        sources, slides = self._workspace_store.load()
+        paths = list(dict.fromkeys(sources + [s.source_file for s in slides]))
+        if not paths:
+            return
+        self._restoring = True
+        self._restore_slides = slides
+        self._restore_missing = sum(not Path(p).is_file() for p in paths)
+        self.add_sources(p for p in paths if Path(p).is_file())
+        if not self.is_loading:
+            self._finish_restore()
+
+    def _finish_restore(self):
+        if not self._restoring or self.is_loading or self._pending:
+            return
+        restored = []
+        for saved in self._restore_slides:
+            state = self._sources.get(os.path.normcase(str(Path(saved.source_file).resolve())))
+            if not state or not state.result:
+                continue
+            match = next((slide for slide in state.result.presentation.slides
+                          if slide.slide_id == saved.slide_id
+                          and slide.slide_index == saved.slide_index
+                          and slide.source_revision == saved.source_revision), None)
+            if match is not None:
+                restored.append(match)
+        skipped = len(self._restore_slides) - len(restored)
+        self.output_panel.model.restore(restored)
+        self.output_panel.model.undo_stack.clear()
+        self._restore_slides = []
+        self._restoring = False
+        self._restore_incomplete = bool(skipped or self._restore_missing)
+        self.status_text.setText(f'이전 작업 복원 · 결과 {len(restored)}장')
+        if skipped or self._restore_missing:
+            self.notice.setText(f'이전 작업의 일부를 복원하지 못했습니다. 누락된 파일 {self._restore_missing}개 · '
+                                f'누락·변경·읽기 실패로 제외된 슬라이드 {skipped}장. 원본을 확인하고 다시 담아 주세요.')
+            self.notice.show()
+        if not self._restore_incomplete:
+            self._schedule_workspace_save()
         else:
-            self._output_height_mode = "collapsed"
-            self.composer.setSizes([self.composer.height(), 0])
-            self._update_output_toggle()
-
-    def _on_output_splitter_moved(self, position: int, index: int) -> None:
-        self._output_resize_timer.stop()
-        self._output_height_mode = "collapsed" if self.composer.sizes()[1] == 0 else "custom"
-        self._update_output_toggle()
-
-    def _update_output_toggle(self) -> None:
-        collapsed = self.composer.sizes()[1] == 0
-        label = "결과물 펼치기" if collapsed else "결과물 접기"
-        self.output_toggle_action.setText(label)
-        self.output_toggle_action.setIcon(icon("expand" if collapsed else "collapse"))
-        self.output_toggle_action.setToolTip(label)
-        self.output_toggle_button.setAccessibleName(label)
-        self.collapsed_output_toggle_button.setAccessibleName(label)
-        self.collapsed_output_toggle_button.setVisible(collapsed)
+            self.workspace_status.setText('일부 미복원 · 원본 작업 기록은 보관됩니다')
+        self._update_actions()
 
     @property
     def is_loading(self) -> bool:
@@ -316,7 +402,7 @@ class MainWindow(QMainWindow):
             self._show_generation_error(f"저장 폴더를 열지 못했습니다. 탐색기에서 확인하세요: {directory}")
 
     def choose_output(self) -> None:
-        if self.is_busy or self._closing:
+        if self.is_busy or self._closing or self._restoring or not self.output_panel.output_slides:
             return
         filename, _ = QFileDialog.getSaveFileName(
             self, "새 PowerPoint 저장",
@@ -345,7 +431,7 @@ class MainWindow(QMainWindow):
 
     def start_generation(self, output: Path, *, overwrite: bool = False,
                          allow_mixed_sizes: bool | None = None) -> bool:
-        if self.is_busy or self._closing or not self.output_panel.output_slides:
+        if self.is_busy or self._closing or self._restoring or not self.output_panel.output_slides:
             return False
         self._allow_mixed_sizes = allow_mixed_sizes
         self.last_generation_result = None
@@ -391,6 +477,8 @@ class MainWindow(QMainWindow):
         self.open_file_button.setToolTip(f"{result.output_path}\n다시 생성하려면 PowerPoint를 닫아 주세요.")
         self.open_output_button.setToolTip(f"{Path(result.output_path).name}\n{Path(result.output_path).parent}")
         self._generation_outcome = f"저장 완료 · {result.slide_count}장 · {result.output_path}"
+        self.workspace_status.setText(f'저장 완료 · {Path(result.output_path).name}')
+        self.workspace_status.setToolTip(result.output_path)
 
     @Slot(object)
     def _on_generation_progress(self, event: GenerationProgress) -> None:
@@ -459,6 +547,17 @@ class MainWindow(QMainWindow):
             self, "최상위 폴더 선택", str(self.source_panel.root_path))
         if directory:
             self.source_panel.set_root(directory)
+            self.source_panel.show_browser()
+
+    def choose_presentations(self):
+        if self._closing or self.is_generating or self._restoring:
+            return
+        files, _ = QFileDialog.getOpenFileNames(self, '추가할 PowerPoint 선택',
+                                                str(self.source_panel.root_path),
+                                                'PowerPoint (*.pptx *.pptm)')
+        if files:
+            self.source_panel.show_loaded()
+            self.add_sources(files)
 
     def _root_changed(self, path: str, *, remember: bool = True) -> None:
         self._browser_root = Path(path)
@@ -482,12 +581,14 @@ class MainWindow(QMainWindow):
 
     def _show_help(self) -> None:
         QMessageBox.information(
-            self, "사용 안내", "최상위 폴더: 좌상단 폴더 버튼 · Ctrl+O\n"
+            self, "사용 안내", "PPT 추가: Ctrl+O · 폴더 탐색: Ctrl+Shift+O\n"
             "원본 선택: 왼쪽 폴더 펼치기 · PPT 클릭 · 파일 끌어 놓기\n"
-            "슬라이드 담기: + 버튼 · 더블클릭 · 출력 영역에 끌어 놓기\n"
+            "슬라이드 담기: 선택한 장 담기 · 더블클릭 · 결과 영역에 끌어 놓기\n"
             "여러 항목 선택: Ctrl·Shift\n"
-            "출력 편집: 드래그로 순서 변경 · Delete 삭제 · Ctrl+D 복제\n\n"
-            "PPT 생성으로 저장하세요. 편집 목록은 앱 종료 시 초기화됩니다.")
+            "출력 편집: 드래그로 순서 변경 · Delete 삭제 · Ctrl+D 복제\n"
+            "실행 취소: Ctrl+Z · 다시 실행: Ctrl+Y · 확대 보기: Space\n"
+            "현재 PPT의 제목·본문 검색: 원본 영역 검색창\n\n"
+            "PPT로 저장(Ctrl+S)으로 결과를 저장하세요. 작업 목록은 자동 복원됩니다.")
 
     def add_sources(self, paths: Iterable[str | Path]) -> None:
         if self._closing or self.is_generating:
@@ -518,6 +619,8 @@ class MainWindow(QMainWindow):
             self.notice.hide()
         if added and not self.source_panel.current_key():
             self.source_panel.select_source(added[0])
+        if added:
+            self._schedule_workspace_save()
         self._update_actions()
         self._start_pending()
 
@@ -629,6 +732,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self.close)
         else:
             self._start_pending()
+            self._finish_restore()
 
     def cancel_loading(self) -> None:
         if self._generation_worker is not None:
@@ -655,7 +759,7 @@ class MainWindow(QMainWindow):
         elif state.status == "failed":
             self.slide_grid.show_message(Path(state.path).name, state.error + "\n\n문제를 해결한 뒤 ‘다시 읽기’를 누르세요.")
         elif state.result is not None:
-            self.slide_grid.show_presentation(state.result.presentation)
+            self.slide_grid.show_presentation(state.result.presentation, state.result.search_text)
         elif state.status == "cancelled":
             self.slide_grid.show_message(Path(state.path).name, "불러오기를 취소했습니다. ‘다시 읽기’로 재시도할 수 있습니다.")
         else:
@@ -664,7 +768,7 @@ class MainWindow(QMainWindow):
 
     def _update_actions(self) -> None:
         selected = bool(self.source_panel.selected_keys())
-        available = not self.is_busy and not self._closing
+        available = not self.is_busy and not self._closing and not self._restoring
         saved_output_exists = (self._last_saved_result is not None
                                and Path(self._last_saved_result.output_path).is_file())
         self.open_file_button.setVisible(saved_output_exists and available)
@@ -673,9 +777,13 @@ class MainWindow(QMainWindow):
         self.reload_action.setEnabled(selected and available)
         self.clear_action.setEnabled(bool(self._sources) and available)
         self.add_action.setEnabled(not self._closing and not self.is_generating)
+        self.file_add_action.setEnabled(not self._closing and not self.is_generating and not self._restoring)
         self.generate_button.setEnabled(bool(self.output_panel.output_slides) and available)
-        self.output_panel.setEnabled(not self.is_generating and not self._closing)
-        self.slide_grid.setEnabled(not self.is_generating and not self._closing)
+        self.save_action.setEnabled(self.generate_button.isEnabled())
+        self.undo_action.setEnabled(self.output_panel.model.undo_stack.canUndo() and available)
+        self.redo_action.setEnabled(self.output_panel.model.undo_stack.canRedo() and available)
+        self.output_panel.setEnabled(not self.is_generating and not self._closing and not self._restoring)
+        self.slide_grid.setEnabled(not self.is_generating and not self._closing and not self._restoring)
         self.source_panel.setEnabled(not self.is_generating and not self._closing)
         self.originals_panel.setEnabled(not self.is_generating and not self._closing)
 
@@ -688,6 +796,7 @@ class MainWindow(QMainWindow):
         self.source_panel.remove_sources(keys)
         self._show_source(self.source_panel.current_key())
         self._update_summary()
+        self._schedule_workspace_save()
 
     def clear_sources(self) -> None:
         if self.is_busy or self._closing:
@@ -698,6 +807,7 @@ class MainWindow(QMainWindow):
         self.notice.hide()
         self._show_source("")
         self._update_summary()
+        self._schedule_workspace_save()
 
     def _update_summary(self) -> None:
         ready = [state for state in self._sources.values() if state.status == "ready"]
@@ -729,6 +839,8 @@ class MainWindow(QMainWindow):
         event.acceptProposedAction()
 
     def closeEvent(self, event) -> None:
+        self._save_timer.stop()
+        self._save_workspace()
         self.source_panel.shutdown_search()
         if self.is_busy or self.source_panel.has_search:
             self._closing = True

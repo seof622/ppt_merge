@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import hashlib
 import json
 import logging
@@ -50,6 +50,7 @@ class ThumbnailResult:
     cache_directory: str
     cache_hit: bool
     generated_slides: int
+    search_text: dict[int, str] = field(default_factory=dict)
 
 
 ProgressCallback = Callable[[ThumbnailProgress], None]

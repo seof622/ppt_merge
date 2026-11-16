@@ -1,9 +1,9 @@
 """메인 화면의 폴더 탐색과 읽은 원본 목록. COM을 호출하지 않는다."""
 from pathlib import Path
-from PySide6.QtCore import QDir, QEasingCurve, QEvent, QItemSelectionModel, QPropertyAnimation, QSignalBlocker, QStandardPaths, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QDir, QEasingCurve, QEvent, QItemSelectionModel, QPropertyAnimation, QSignalBlocker, QSize, QStandardPaths, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QFileSystemModel, QFrame, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QSizePolicy, QStackedWidget, QTreeView, QVBoxLayout, QWidget)
+    QLineEdit, QListWidget, QListWidgetItem, QSizePolicy, QStackedWidget, QTabWidget, QTreeView, QVBoxLayout, QWidget)
 from src.ui.file_browser import FileSearchThread, SourceTreeModel, source_key
 from src.ui.icons import icon_button
 
@@ -26,7 +26,18 @@ class SourcePanel(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
-        self.heading = QLabel("PPT 선택")
+        title = QLabel('자료')
+        title.setObjectName('sectionTitle')
+        layout.addWidget(title)
+        self.tabs = QTabWidget()
+        self.tabs.setObjectName('sourceTabs')
+        self.tabs.setAccessibleName('자료 보기 방식')
+        layout.addWidget(self.tabs, 1)
+        self.browser_page = QWidget()
+        browser_layout = QVBoxLayout(self.browser_page)
+        browser_layout.setContentsMargins(0, 12, 0, 0)
+        browser_layout.setSpacing(12)
+        self.heading = QLabel("파일 찾기")
         self.heading.setObjectName("sectionTitle")
         self.heading.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
         heading_layout = QHBoxLayout()
@@ -42,7 +53,7 @@ class SourcePanel(QFrame):
         self.search_button.setCheckable(True)
         self.search_button.setObjectName("searchToggle")
         heading_layout.addWidget(self.search_button)
-        layout.addLayout(heading_layout)
+        browser_layout.addLayout(heading_layout)
         self.search_container = QWidget()
         search_layout = QVBoxLayout(self.search_container)
         search_layout.setContentsMargins(0, 0, 0, 0)
@@ -64,7 +75,7 @@ class SourcePanel(QFrame):
         self._search_shortcut = QShortcut(QKeySequence.StandardKey.Find, self)
         self._search_shortcut.activated.connect(self._open_search)
         self.stack = QStackedWidget()
-        layout.addWidget(self.stack, 1)
+        browser_layout.addWidget(self.stack, 1)
         self.file_model = QFileSystemModel(self)
         self.file_model.setReadOnly(True)
         self.file_model.setOption(QFileSystemModel.Option.DontUseCustomDirectoryIcons)
@@ -93,15 +104,15 @@ class SourcePanel(QFrame):
         self.search_status.setObjectName("mutedText")
         self.search_status.setWordWrap(True)
         self.search_status.hide()
-        layout.addWidget(self.search_status)
+        browser_layout.addWidget(self.search_status)
         self.originals_panel = QFrame()
         self.originals_panel.setObjectName("originalsPanel")
         originals_layout = QVBoxLayout(self.originals_panel)
-        originals_layout.setContentsMargins(16, 16, 16, 16)
+        originals_layout.setContentsMargins(0, 12, 0, 0)
         originals_layout.setSpacing(12)
         originals_heading = QHBoxLayout()
         originals_heading.setSpacing(8)
-        self.originals_heading = QLabel("PPT 목록")
+        self.originals_heading = QLabel("불러온 자료")
         self.originals_heading.setObjectName("sectionTitle")
         self.originals_heading.setMinimumHeight(36)
         originals_heading.addWidget(self.originals_heading)
@@ -114,7 +125,13 @@ class SourcePanel(QFrame):
         self.list.setObjectName("sourceList")
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.list.setSpacing(4)
+        self.list.setIconSize(QSize(18, 18))
+        self.tree.setIconSize(QSize(18, 18))
         self.list.setWordWrap(True)
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.tabs.addTab(self.originals_panel, '불러온 PPT')
+        self.tabs.addTab(self.browser_page, '폴더 탐색')
+        self.tabs.currentChanged.connect(self._tab_changed)
         originals_layout.addWidget(self.list, 1)
         self.list.setToolTip("읽은 원본 · 파일 끌어 놓기로 추가 · Ctrl·Shift로 여러 파일 선택")
         self.list.currentItemChanged.connect(self._current_changed)
@@ -136,7 +153,18 @@ class SourcePanel(QFrame):
         desktop = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DesktopLocation)
         self.set_root(Path(desktop) if desktop and Path(desktop).is_dir() else Path.home())
 
+    def _tab_changed(self, index):
+        self._selection_origin = 'originals' if index == 0 else 'explorer'
+        self.selection_changed.emit()
+
+    def show_loaded(self):
+        self.tabs.setCurrentIndex(0)
+
+    def show_browser(self):
+        self.tabs.setCurrentIndex(1)
+
     def _open_search(self) -> None:
+        self.show_browser()
         self.search_button.setChecked(True)
         self.search.setFocus(Qt.FocusReason.ShortcutFocusReason)
         self.search.selectAll()
@@ -316,6 +344,8 @@ class SourcePanel(QFrame):
             thread.requestInterruption()
 
     def _query_changed(self, text: str) -> None:
+        if text.strip():
+            self.show_browser()
         self._selection_origin = "explorer"
         selected = self.current_key() if self.stack.currentWidget() == self.results and not text.strip() else ""
         self._debounce.stop()

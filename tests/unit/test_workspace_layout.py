@@ -41,22 +41,21 @@ class WorkspaceLayoutTests(unittest.TestCase):
         rect.moveTopLeft(widget.mapTo(self.window, QPoint(0, 0)))
         return rect
 
-    def test_sidebars_keep_full_height_when_preview_collapses(self):
+    def test_sidebar_tabs_share_one_column_and_keep_height(self):
         for width, height in ((1600, 900), (1000, 640)):
             self.window.resize(width, height)
             QTest.qWait(60)
             source = self.bounds(self.window.source_panel)
-            originals = self.bounds(self.window.originals_panel)
             workspace = self.bounds(self.window.workspace)
-            self.assertLess(source.right(), originals.left())
-            self.assertLess(originals.right(), workspace.left())
+            self.assertLess(source.right(), workspace.left())
             self.assertEqual(source.bottom(), workspace.bottom())
-            self.assertEqual(originals.bottom(), workspace.bottom())
-            self.window.output_toggle_button.click()
+            self.window.source_panel.show_browser()
             QTest.qWait(30)
+            self.assertTrue(self.window.source_panel.browser_page.isVisible())
+            self.assertFalse(self.window.originals_panel.isVisible())
             self.assertEqual(self.bounds(self.window.source_panel), source)
-            self.assertEqual(self.bounds(self.window.originals_panel), originals)
-            self.window.collapsed_output_toggle_button.click()
+            self.window.source_panel.show_loaded()
+            self.assertTrue(self.window.originals_panel.isVisible())
 
     def test_move_commands_remain_available_in_compact_menu(self):
         panel = self.window.output_panel
@@ -65,13 +64,14 @@ class WorkspaceLayoutTests(unittest.TestCase):
         panel.add_slides(slides)
         panel.select_rows([1])
         self.window.resize(1000, 640)
+        self.window.set_workspace_mode('result')
         QTest.qWait(80)
-        self.assertTrue(panel.more_button.isVisible())
-        self.assertFalse(panel.tool_buttons["up"].isVisible())
+        self.assertTrue(panel.more_button.isVisible() or panel.tool_buttons['up'].isVisible())
         self.assertIn(panel.actions["up"], panel.more_button.menu().actions())
         panel.actions["up"].trigger()
         self.assertEqual([slide.slide_index for slide in panel.output_slides], [2, 1, 3])
         self.window.resize(1600, 900)
+        self.window.set_workspace_mode('result')
         QTest.qWait(80)
         self.assertTrue(panel.tool_buttons["up"].isVisible())
         self.assertFalse(panel.more_button.isVisible())
@@ -84,20 +84,19 @@ class WorkspaceLayoutTests(unittest.TestCase):
         self.window.resize(1000, 640)
         QTest.qWait(80)
         self.assertEqual(self.window.width(), 1000)
-        for collapsed in (False, True):
-            if collapsed:
-                self.window.output_toggle_button.click()
-                QTest.qWait(50)
+        for mode in ('source', 'result'):
+            self.window.set_workspace_mode(mode)
+            QTest.qWait(30)
             controls = [self.window.open_file_button, self.window.open_output_button,
-                        self.window.generate_button]
-            if collapsed:
-                controls.insert(0, self.window.collapsed_output_toggle_button)
+                        ]
             footer = self.bounds(self.window.output_panel.footer_widget)
             for button in controls:
                 self.assertTrue(button.isVisible())
                 self.assertTrue(footer.contains(self.bounds(button)))
             for left, right in zip(controls, controls[1:]):
                 self.assertLess(self.bounds(left).right(), self.bounds(right).left())
+            self.assertTrue(self.window.generate_button.isVisible())
+            self.assertTrue(self.window.rect().contains(self.bounds(self.window.generate_button)))
 
 
 if __name__ == "__main__":

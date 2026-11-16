@@ -158,7 +158,9 @@ class MainSidebarTests(unittest.TestCase):
         return self.panel.results.item(0)
 
     def assert_status_icon(self, item, status):
-        expected = self.app.style().standardIcon(status).pixmap(24, 24).toImage()
+        from src.ui.icons import icon
+        expected = (icon('presentation') if status == QStyle.StandardPixmap.SP_DialogApplyButton
+                    else self.app.style().standardIcon(status)).pixmap(24, 24).toImage()
         self.assertEqual(item.icon().pixmap(24, 24).toImage(), expected)
 
     def click_result(self, item):
@@ -500,5 +502,6 @@ class MainSidebarTests(unittest.TestCase):
         toolbar = self.window.findChild(QToolButton)
         self.assertIsNotNone(toolbar)
         self.assertFalse(self.window.add_action.icon().isNull())
-        self.assertEqual(self.window.add_action.shortcut().toString(), "Ctrl+O")
-        self.assertIn("최상위", self.window.add_action.toolTip())
+        self.assertEqual(self.window.file_add_action.shortcut().toString(), "Ctrl+O")
+        self.assertEqual(self.window.add_action.shortcut().toString(), "Ctrl+Shift+O")
+        self.assertIn("폴더", self.window.add_action.toolTip())
