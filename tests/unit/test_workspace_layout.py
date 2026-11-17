@@ -15,6 +15,7 @@ from src.main import configure_application
 from src.models.slide_model import SlideItem
 from src.ppt.powerpoint_service import GenerationResult
 from src.ui.main_window import MainWindow
+from test_ui import dispose_widget
 
 
 class WorkspaceLayoutTests(unittest.TestCase):
@@ -34,6 +35,7 @@ class WorkspaceLayoutTests(unittest.TestCase):
     def tearDown(self):
         self.window.close()
         self.app.processEvents()
+        dispose_widget(self.window)
         self.temp.cleanup()
 
     def bounds(self, widget):

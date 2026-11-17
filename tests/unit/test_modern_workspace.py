@@ -28,6 +28,7 @@ class ModernWorkspaceTests(unittest.TestCase):
     def restart(self):
         self.window.close()
         self.app.processEvents()
+        fixture.dispose_widget(self.window)
         self.window = MainWindow(self.root/'cache', self.factory)
         self.window.show()
         self.app.processEvents()

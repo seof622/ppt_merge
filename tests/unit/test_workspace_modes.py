@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication
 from src.main import configure_application
 from src.models.slide_model import SlideItem
 from src.ui.main_window import MainWindow
+from test_ui import dispose_widget
 
 
 class WorkspaceModeTests(unittest.TestCase):
@@ -26,6 +27,7 @@ class WorkspaceModeTests(unittest.TestCase):
     def tearDown(self):
         self.window.close()
         self.app.processEvents()
+        dispose_widget(self.window)
         self.temp.cleanup()
 
     def test_wide_workspace_shows_both_panels_at_full_height(self):
@@ -44,6 +46,7 @@ class WorkspaceModeTests(unittest.TestCase):
         self.assertFalse(self.window.slide_grid.isVisible())
         self.assertTrue(self.window.output_panel.isVisible())
         self.assertTrue(self.window.generate_button.isVisible())
+        self.assertFalse(self.window.output_toggle_button.icon().isNull())
         self.window.mode_buttons['both'].click()
         self.assertTrue(self.window.slide_grid.isVisible())
         self.assertEqual(self.window.output_panel.selected_rows(),[1])

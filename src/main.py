@@ -13,6 +13,7 @@ from src.ui.main_window import MainWindow
 from src.ui.theme import APP_STYLESHEET, application_palette
 from src.utils.logger import configure_logging
 from src.utils.app_paths import app_data_root
+from src.utils.qt_lifecycle import shutdown_application
 
 ROOT = app_data_root()
 
@@ -21,11 +22,18 @@ def configure_application(app: QApplication) -> None:
     app.setApplicationName("PPT Merge")
     app.setStyle("Fusion")
     app.setPalette(application_palette())
-    # 화면 없는 Qt 검증에서도 Windows의 한글 글꼴로 실제 UI를 렌더한다.
-    font_path = Path("C:/Windows/Fonts/malgun.ttf")
-    if font_path.is_file():
-        QFontDatabase.addApplicationFont(str(font_path))
-    app.setFont(QFont("맑은 고딕", 10))
+    # 화면 없는 검증에 필요한 글꼴은 QApplication마다 한 번만 등록한다.
+    # 실제 Windows 화면에서는 시스템 글꼴을 그대로 사용한다.
+    if app.platformName() == "offscreen" and not app.property("pptmergeFontsLoaded"):
+        for name in ("segoeui.ttf", "segoeuib.ttf", "malgun.ttf", "malgunbd.ttf"):
+            font_path = Path("C:/Windows/Fonts") / name
+            if font_path.is_file():
+                QFontDatabase.addApplicationFont(str(font_path))
+        app.setProperty("pptmergeFontsLoaded", True)
+    font = QFont()
+    font.setFamilies(["Segoe UI", "맑은 고딕"])
+    font.setPixelSize(13)
+    app.setFont(font)
     app.setStyleSheet(APP_STYLESHEET)
 
 
@@ -52,6 +60,8 @@ def main() -> int:
         return app.exec()
     finally:
         logger.info("앱 종료")
+        # Python GC에 남겨 두면 QWidget·폰트가 QApplication보다 늦게 해제될 수 있다.
+        shutdown_application(app)
 
 
 if __name__ == "__main__":

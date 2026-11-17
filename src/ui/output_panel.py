@@ -3,18 +3,19 @@
 from collections.abc import Callable, Iterable
 from uuid import uuid4
 
-from PySide6.QtCore import QModelIndex, QSize, Qt, Signal, QItemSelectionModel
-from PySide6.QtGui import QAction, QColor, QDrag, QKeySequence, QPainter, QPalette, QPen, QShortcut, QUndoCommand, QUndoStack
+from PySide6.QtCore import QEasingCurve, QModelIndex, QPoint, QRect, QRectF, QSize, Qt, Signal, QItemSelectionModel, QVariantAnimation
+from PySide6.QtGui import QAction, QColor, QDrag, QFont, QKeySequence, QPainter, QPalette, QPen, QShortcut, QUndoCommand, QUndoStack
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel, QLayout, QListView, QMenu,
-                               QComboBox, QPushButton, QSlider, QSizePolicy, QToolButton, QVBoxLayout, QWidget)
+                               QComboBox, QPushButton, QSlider, QSizePolicy, QStyle, QStyleOptionComboBox, QStyleOptionViewItem,
+                               QToolButton, QVBoxLayout, QWidget)
 
 from src.models.project_model import OutputSequence
 from src.models.slide_model import SlideItem
 from src.ui.slide_grid import SlideListModel
 from src.ui.slide_mime import make_slide_mime, read_slide_mime
 from src.ui.icons import icon, icon_button
-from src.ui.theme import ACCENT
-from src.ui.slide_delegate import SlideCardDelegate, drag_image
+from src.ui.theme import ACCENT, MUTED
+from src.ui.slide_delegate import SlideCardDelegate, drag_image, slide_card_size
 from src.ui.slide_preview import open_preview
 
 
@@ -39,7 +40,7 @@ class OutputListModel(SlideListModel):
 
     def __init__(self, parent=None, drag_token: str = "") -> None:
         super().__init__(parent, drag_token)
-        self.card_size = QSize(196, 156)
+        self.card_size = slide_card_size(224, output=True)
         self.sequence = OutputSequence()
         self.origin = uuid4().hex
         self.revision = 0
@@ -135,6 +136,17 @@ class OutputListView(QListView):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._insert_row: int | None = None
+        self._preview_order: list[int | None] | None = None
+        self._preview_count = 0
+        self._preview_moving = False
+        self._preview_starts: dict[int, QRectF] = {}
+        self._preview_targets: dict[int, QRectF] = {}
+        self._preview_animation = QVariantAnimation(self)
+        self._preview_animation.setDuration(150)
+        self._preview_animation.setStartValue(0.0)
+        self._preview_animation.setEndValue(1.0)
+        self._preview_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._preview_animation.valueChanged.connect(lambda value: self.viewport().update())
         self.setObjectName("outputView")
         self.setViewMode(QListView.ViewMode.IconMode)
         self.setFlow(QListView.Flow.LeftToRight)
@@ -154,16 +166,21 @@ class OutputListView(QListView):
         self.setDropIndicatorShown(False)
         self.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.thumbnail_width = 208
+        self.thumbnail_width = 224
 
     def resizeEvent(self, event) -> None:
-        if event is not None:
-            super().resizeEvent(event)
+        super().resizeEvent(event)
+        self._resize_cards()
+
+    def _resize_cards(self):
         model = self.model()
         if model is None:
             return
-        width = self.thumbnail_width
-        size = QSize(width + 24, round(width * 9 / 16) + 88)
+        width = min(self.thumbnail_width, max(100, self.viewport().width() - 2 * self.spacing() - 16))
+        if not self.isWrapping():
+            available = self.viewport().height() - 2 * self.spacing() - 4
+            width = min(width, max(100, int((available - 62) * 16 / 9)))
+        size = slide_card_size(width, output=True)
         if model.card_size != size:
             model.card_size = size
             self.setIconSize(QSize(width, round(width * 9 / 16)))
@@ -171,7 +188,7 @@ class OutputListView(QListView):
 
     def set_thumbnail_width(self, width):
         self.thumbnail_width = width
-        self.resizeEvent(None)
+        self._resize_cards()
         self.viewport().update()
 
     def startDrag(self, supported_actions) -> None:
@@ -184,29 +201,99 @@ class OutputListView(QListView):
         try:
             drag.exec(Qt.DropAction.MoveAction)
         finally:
+            self.clear_drop_preview()
             drag.deleteLater()
 
+    def _columns(self) -> int:
+        if not self.isWrapping():
+            return max(1, self.model().rowCount() + 1)
+        return max(1, self.viewport().width() // (self.model().card_size.width() + self.spacing()))
+
+    def _slot_rect(self, slot: int) -> QRect:
+        """모델을 바꾸지 않고 슬롯의 콘텐츠 좌표를 구한다."""
+        size, spacing = self.model().card_size, self.spacing()
+        columns = self._columns()
+        return QRect(spacing + (slot % columns) * (size.width() + spacing),
+                     spacing + (slot // columns) * (size.height() + spacing),
+                     size.width(), size.height())
+
+    def _viewport_rect(self, rect: QRectF) -> QRectF:
+        return rect.translated(-self.horizontalScrollBar().value(), -self.verticalScrollBar().value())
+
     def insertion_row(self, point) -> int:
-        for row in range(self.model().rowCount()):
-            rect = self.visualRect(self.model().index(row, 0))
-            if point.y() < rect.top():
-                return row
-            if point.y() <= rect.bottom() and point.x() < rect.center().x():
-                return row
-        return self.model().rowCount()
+        point = point + QPoint(self.horizontalScrollBar().value(), self.verticalScrollBar().value())
+        size, spacing = self.model().card_size, self.spacing()
+        columns = self._columns()
+        line = max(0, point.y() // (size.height() + spacing))
+        column = min(columns - 1, max(0, point.x() // (size.width() + spacing)))
+        slot = line * columns + column
+        if point.x() > self._slot_rect(slot).center().x():
+            slot += 1
+        return min(slot, self.model().rowCount())
+
+    def _animated_rect(self, row: int) -> QRectF:
+        target = self._preview_targets[row]
+        start = self._preview_starts.get(row, target)
+        progress = float(self._preview_animation.currentValue() or 0.0)
+        return QRectF(start.x() + (target.x() - start.x()) * progress,
+                      start.y() + (target.y() - start.y()) * progress,
+                      target.width(), target.height())
+
+    def _show_drop_preview(self, order, count, moving):
+        if order == self._preview_order:
+            return
+        starts = {row: (self._animated_rect(row) if row in self._preview_targets
+                        else QRectF(self._slot_rect(row))) for row in order if row is not None}
+        self._preview_animation.stop()
+        self._preview_order = order
+        self._preview_count, self._preview_moving = count, moving
+        self._preview_starts = starts
+        self._preview_targets = {row: QRectF(self._slot_rect(slot))
+                                 for slot, row in enumerate(order) if row is not None}
+        self.updateGeometries()
+        # 스크롤바가 나타나 열 수가 바뀐 경우에도 최종 슬롯 위치를 맞춘다.
+        self._preview_targets = {row: QRectF(self._slot_rect(slot))
+                                 for slot, row in enumerate(order) if row is not None}
+        self._preview_animation.start()
+
+    def clear_drop_preview(self):
+        self._preview_animation.stop()
+        self._insert_row = None
+        self._preview_order = None
+        self._preview_starts.clear()
+        self._preview_targets.clear()
+        self.updateGeometries()
+        self.viewport().update()
+
+    def updateGeometries(self):
+        super().updateGeometries()
+        if self._preview_order is None or self.model() is None:
+            return
+        size, spacing = self.model().card_size, self.spacing()
+        if self.isWrapping():
+            lines = (len(self._preview_order) + self._columns() - 1) // self._columns()
+            self.verticalScrollBar().setRange(0, max(0, lines * (size.height() + spacing) - self.viewport().height()))
+        else:
+            self.horizontalScrollBar().setRange(0, max(0, len(self._preview_order) * (size.width() + spacing) - self.viewport().width()))
 
     def _accept_drag(self, event) -> None:
         model = self.model()
         payload = read_slide_mime(event.mimeData(), model.drag_token)
         action = (Qt.DropAction.MoveAction if payload and payload["origin"] == model.origin
                   else Qt.DropAction.CopyAction)
-        row = self.insertion_row(event.position().toPoint())
+        moving = bool(payload and payload["origin"] == model.origin)
+        removed = set(payload["rows"]) if moving else set()
+        remaining = [row for row in range(model.rowCount()) if row not in removed]
+        slot = min(self.insertion_row(event.position().toPoint()), len(remaining))
+        row = remaining[slot] if slot < len(remaining) else model.rowCount()
         if model.canDropMimeData(event.mimeData(), action, row, 0, QModelIndex()):
             self._insert_row = row
+            order = remaining[:slot] + [None] + remaining[slot:]
+            self._show_drop_preview(order, len(payload["slides"]), moving)
             event.setDropAction(action)
             event.accept()
         else:
-            self._insert_row = None
+            self.clear_drop_preview()
             event.ignore()
         self.viewport().update()
 
@@ -220,38 +307,96 @@ class OutputListView(QListView):
         self._accept_drag(event)
 
     def dragLeaveEvent(self, event) -> None:
-        self._insert_row = None
-        self.viewport().update()
+        self.clear_drop_preview()
         super().dragLeaveEvent(event)
 
     def dropEvent(self, event) -> None:
         self._accept_drag(event)
         if event.isAccepted():
+            target = self._insert_row
+            self.clear_drop_preview()
             if not self.model().dropMimeData(event.mimeData(), event.dropAction(),
-                                             self._insert_row, 0, QModelIndex()):
+                                             target, 0, QModelIndex()):
                 event.ignore()
-        self._insert_row = None
-        self.viewport().update()
+        self.clear_drop_preview()
 
     def paintEvent(self, event) -> None:
+        if self._preview_order is not None:
+            self._paint_drop_preview()
+            return
         super().paintEvent(event)
         painter = QPainter(self.viewport())
         if self.model().rowCount() == 0:
             painter.setPen(self.palette().color(QPalette.ColorRole.PlaceholderText))
             painter.drawText(self.viewport().rect(), Qt.AlignmentFlag.AlignCenter,
                              "만들 PPT가 비어 있습니다\n원본에서 슬라이드를 선택해 담거나 여기로 끌어 놓으세요")
-        if self._insert_row is not None:
-            row = self._insert_row
-            if self.model().rowCount() == 0:
-                x, top, bottom = 8, 24, 180
-            elif row == self.model().rowCount():
-                rect = self.visualRect(self.model().index(row - 1, 0))
-                x, top, bottom = rect.right() + 4, rect.top(), rect.bottom()
-            else:
-                rect = self.visualRect(self.model().index(row, 0))
-                x, top, bottom = rect.left() - 4, rect.top(), rect.bottom()
-            painter.setPen(QPen(QColor(ACCENT), 3))
-            painter.drawLine(max(2, x), max(2, top), max(2, x), min(bottom, self.viewport().height() - 8))
+        painter.end()
+
+    def _paint_drop_preview(self):
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.viewport().rect(), QColor('#EDF3FF'))
+        for slot, row in enumerate(self._preview_order):
+            if row is None:
+                continue
+            rect = self._viewport_rect(self._animated_rect(row)).toRect()
+            if not rect.intersects(self.viewport().rect()):
+                continue
+            option = QStyleOptionViewItem()
+            self.initViewItemOption(option)
+            option.rect = rect
+            option.state = QStyle.StateFlag.State_Enabled
+            if self.selectionModel().isSelected(self.model().index(row, 0)):
+                option.state |= QStyle.StateFlag.State_Selected
+            self.itemDelegate().paint(painter, option, self.model().index(row, 0))
+        slot = self._preview_order.index(None)
+        rect = self._viewport_rect(QRectF(self._slot_rect(slot))).toRect().adjusted(4, 4, -4, -4)
+        painter.setBrush(QColor('#E0EAFF'))
+        painter.setPen(QPen(QColor('#A9C0EF'), 1.5))
+        painter.drawRoundedRect(rect, 9, 9)
+        center = rect.center()
+        circle = QRect(center.x() - 15, center.y() - 43, 30, 30)
+        painter.setBrush(QColor('#F5F8FF'))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(circle)
+        painter.setPen(QPen(QColor(ACCENT), 1.8))
+        painter.drawLine(circle.center() + QPoint(-6, 0), circle.center() + QPoint(6, 0))
+        painter.drawLine(circle.center() + QPoint(0, -6), circle.center() + QPoint(0, 6))
+        font = QFont(self.font())
+        font.setPixelSize(13)
+        font.setWeight(QFont.Weight.Medium)
+        painter.setFont(font)
+        painter.setPen(QColor('#345CB0'))
+        painter.drawText(QRect(rect.left() + 4, center.y() - 4, rect.width() - 8, 24),
+                         Qt.AlignmentFlag.AlignCenter, '여기에 놓기')
+        font.setPixelSize(12)
+        font.setWeight(QFont.Weight.Normal)
+        painter.setFont(font)
+        painter.setPen(QColor(MUTED))
+        label = f'{slot + 1}번째 · {self._preview_count}장 {"이동" if self._preview_moving else "추가"}'
+        painter.drawText(QRect(rect.left() + 4, center.y() + 22, rect.width() - 8, 22),
+                         Qt.AlignmentFlag.AlignCenter, label)
+        painter.end()
+
+
+class ViewModeComboBox(QComboBox):
+    """표시 방식 컨트롤에도 공통 선 아이콘을 사용한다."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._chevron = icon('chevron-down')
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        option = QStyleOptionComboBox()
+        self.initStyleOption(option)
+        arrow = self.style().subControlRect(QStyle.ComplexControl.CC_ComboBox, option,
+                                            QStyle.SubControl.SC_ComboBoxArrow, self)
+        painter = QPainter(self)
+        target = arrow.adjusted(4, 0, -4, 0)
+        target.setHeight(16)
+        target.moveCenter(arrow.center())
+        self._chevron.paint(painter, target)
         painter.end()
 
 
@@ -264,7 +409,7 @@ class OutputPanel(QWidget):
         layout = QVBoxLayout(self)
         # 헤더·버튼의 크기 힌트가 splitter의 최소 높이로 전파되지 않게 한다.
         layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
-        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setContentsMargins(20, 20, 20, 16)
         layout.setSpacing(12)
         self.header = QHBoxLayout()
         self.header.setSpacing(8)
@@ -273,7 +418,10 @@ class OutputPanel(QWidget):
         self.count = QLabel("0장 · 0장 선택")
         self.count.setObjectName("mutedText")
         self.header.addWidget(heading)
-        self.header.addWidget(self.count, 1)
+        self.header.addStretch(1)
+        count_row = QHBoxLayout()
+        count_row.addWidget(self.count)
+        count_row.addStretch()
         self.clear_button = icon_button("clear", "출력 비우기", self)
         self.clear_button.clicked.connect(lambda: self.model.clear())
         tools = QHBoxLayout()
@@ -318,6 +466,7 @@ class OutputPanel(QWidget):
         self.more_button.hide()
         tools.addWidget(self.more_button)
         layout.addLayout(self.header)
+        layout.addLayout(count_row)
         self.selection_toolbar = QWidget()
         selection_layout = QHBoxLayout(self.selection_toolbar)
         selection_layout.setContentsMargins(0, 0, 0, 0)
@@ -328,6 +477,7 @@ class OutputPanel(QWidget):
         self.view = OutputListView(self)
         self.model = OutputListModel(self.view, drag_token)
         self.view.setModel(self.model)
+        self.model.modelReset.connect(self.view.clear_drop_preview)
         self.view.setItemDelegate(SlideCardDelegate(self.view, output=True))
         self.model.selection_rows = self.selected_rows
         # 스크롤 영역의 실제 드롭 대상은 내부 viewport이다.
@@ -343,18 +493,22 @@ class OutputPanel(QWidget):
                              "Delete 삭제 · Ctrl+D 복제 · Space 확대 · Ctrl+Z 실행 취소")
         options = QHBoxLayout()
         self.preview_button = QPushButton('확대 보기')
+        self.preview_button.setObjectName('quietButton')
         self.preview_button.clicked.connect(lambda: open_preview(self.view))
         options.addWidget(self.preview_button)
-        self.view_mode = QComboBox()
+        self.view_mode = ViewModeComboBox()
+        self.view_mode.setObjectName('viewModeCombo')
         self.view_mode.addItems(['격자 보기', '가로 목록'])
         self.view_mode.setAccessibleName('결과 슬라이드 표시 방식')
         self.view_mode.currentIndexChanged.connect(self._view_mode_changed)
         options.addWidget(self.view_mode)
         options.addStretch()
-        options.addWidget(QLabel('크기'))
+        zoom_label = QLabel('크기')
+        zoom_label.setObjectName('mutedText')
+        options.addWidget(zoom_label)
         self.zoom = QSlider(Qt.Orientation.Horizontal)
         self.zoom.setRange(150, 280)
-        self.zoom.setValue(208)
+        self.zoom.setValue(224)
         self.zoom.setMaximumWidth(100)
         self.zoom.setAccessibleName('결과 썸네일 크기')
         self.zoom.valueChanged.connect(self.view.set_thumbnail_width)
@@ -386,6 +540,7 @@ class OutputPanel(QWidget):
         self.view.setWrapping(mode == 0)
         self.view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded if mode == 0
                                              else Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.view.set_thumbnail_width(self.zoom.value())
         self.view.doItemsLayout()
 
     @property

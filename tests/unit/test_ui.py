@@ -11,7 +11,7 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PIL import Image
-from PySide6.QtCore import QEventLoop, QMimeData, QObject, QPoint, QPointF, QTimer, Qt, QUrl, Slot
+from PySide6.QtCore import QEvent, QEventLoop, QMimeData, QObject, QPoint, QPointF, QTimer, Qt, QUrl, Slot
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
@@ -36,7 +36,13 @@ def wait_until(predicate, timeout=5000):
     limit.timeout.connect(loop.quit)
     poll.start()
     limit.start(timeout)
-    loop.exec()
+    try:
+        loop.exec()
+    finally:
+        poll.stop()
+        limit.stop()
+        poll.timeout.disconnect()
+        limit.timeout.disconnect()
     if not predicate():
         raise AssertionError("Qt 작업이 제한 시간 안에 끝나지 않았습니다.")
 
@@ -69,6 +75,11 @@ class FakeServiceFactory:
         return Service()
 
 
+def dispose_widget(widget):
+    widget.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
 class UiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -96,6 +107,7 @@ class UiTests(unittest.TestCase):
             wait_until(lambda: not self.window.is_loading)
         self.window.close()
         self.app.processEvents()
+        dispose_widget(self.window)
         self.temporary.cleanup()
 
     def load(self, *paths):

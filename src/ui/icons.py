@@ -19,6 +19,7 @@ _PATHS = {
     "duplicate": '<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V3H3v13h5"/>',
     "previous": '<path d="M15 5l-7 7 7 7"/>',
     "next": '<path d="M9 5l7 7-7 7"/>',
+    "chevron-down": '<path d="M6 9l6 6 6-6"/>',
     "first": '<path d="M6 4v16 M18 5l-7 7 7 7"/>',
     "last": '<path d="M18 4v16 M6 5l7 7-7 7"/>',
     "folder": '<path d="M3 7V4h7l2 3h9v13H3z"/>',
@@ -40,8 +41,8 @@ def icon(name: str, foreground: str | None = None) -> QIcon:
         if mode != QIcon.Mode.Disabled:
             if foreground is not None:
                 color = foreground
-            elif name == "presentation":
-                color = "#a56942"
+            elif name in ("presentation", "add-file"):
+                color = ACCENT
         svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
                f'fill="none" stroke="{color}" stroke-width="1.8" '
                f'stroke-linecap="round" stroke-linejoin="round">{_PATHS[name]}</svg>')

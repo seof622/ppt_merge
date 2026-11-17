@@ -9,14 +9,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PIL import Image
 from PySide6.QtCore import QItemSelectionModel, QMimeData, QModelIndex, QPoint, QPointF, QTimer, Qt
-from PySide6.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent
+from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from src.main import configure_application
 from src.ui.main_window import MainWindow
 from src.ui.slide_mime import SLIDE_MIME, make_slide_mime
-from test_ui import FakeServiceFactory, wait_until
+from test_ui import FakeServiceFactory, wait_until, dispose_widget
 
 
 class OutputUiTests(unittest.TestCase):
@@ -48,6 +48,7 @@ class OutputUiTests(unittest.TestCase):
             wait_until(lambda: not self.window.is_loading)
         self.window.close()
         self.app.processEvents()
+        dispose_widget(self.window)
         self.temporary.cleanup()
 
     def source_select(self, rows):
@@ -75,6 +76,17 @@ class OutputUiTests(unittest.TestCase):
         self.app.sendEvent(viewport, event)
         self.app.processEvents()
         return event.isAccepted()
+
+    def hover(self, mime, position):
+        viewport = self.panel.view.viewport()
+        enter = QDragEnterEvent(position, Qt.DropAction.CopyAction | Qt.DropAction.MoveAction,
+                               mime, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+        self.app.sendEvent(viewport, enter)
+        move = QDragMoveEvent(position, Qt.DropAction.CopyAction | Qt.DropAction.MoveAction,
+                             mime, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+        self.app.sendEvent(viewport, move)
+        QTest.qWait(180)
+        return move.isAccepted()
 
     def add_all(self):
         self.source_select([0, 1, 2])
@@ -107,6 +119,70 @@ class OutputUiTests(unittest.TestCase):
         self.assertTrue(self.drop(self.source_mime([1]), Qt.DropAction.CopyAction, position))
         self.assertEqual(self.numbers(), [(self.a.name, 1), (self.a.name, 2), (self.a.name, 3)])
         self.assertEqual(self.window.slide_grid.model.rowCount(), 3)
+
+    def test_hover_and_cancel_preserve_sequence_selection_and_undo(self):
+        self.add_all()
+        self.panel.select_rows([1])
+        view, model = self.panel.view, self.panel.model
+        view.doItemsLayout()
+        before = self.panel.output_slides
+        undo_count = model.undo_stack.count()
+        for row in range(model.rowCount()):
+            expected = view.visualRect(model.index(row, 0))
+            actual = view._slot_rect(row)
+            actual.translate(-view.horizontalScrollBar().value(), -view.verticalScrollBar().value())
+            self.assertEqual(actual, expected)
+        point = view.visualRect(model.index(1, 0)).topLeft() + QPoint(4, 40)
+        self.assertTrue(self.hover(self.source_mime([0, 2]), point))
+        self.assertEqual(self.panel.output_slides, before)
+        self.assertEqual(self.panel.selected_rows(), [1])
+        self.assertEqual(model.undo_stack.count(), undo_count)
+        self.assertEqual(view._preview_count, 2)
+        self.assertEqual(view._preview_order.index(None), 1)
+        self.app.sendEvent(view.viewport(), QDragLeaveEvent())
+        self.assertIsNone(view._preview_order)
+        self.assertEqual(self.panel.output_slides, before)
+
+    def test_forward_drag_matches_placeholder_and_undo_restores_occurrence(self):
+        self.add_all()
+        self.panel.select_rows([0])
+        view, model = self.panel.view, self.panel.model
+        view.doItemsLayout()
+        point = view.visualRect(model.index(2, 0)).center()
+        mime = model.mimeData([model.index(0, 0)])
+        self.assertTrue(self.hover(mime, point))
+        self.assertEqual(view._preview_order, [1, 2, None])
+        self.assertEqual([s.slide_index for s in self.panel.output_slides], [1, 2, 3])
+        self.assertTrue(self.drop(mime, Qt.DropAction.MoveAction, point))
+        self.assertIsNone(view._preview_order)
+        self.assertEqual([s.slide_index for s in self.panel.output_slides], [2, 3, 1])
+        self.assertEqual(self.panel.selected_rows(), [2])
+        model.undo_stack.undo()
+        self.assertEqual([s.slide_index for s in self.panel.output_slides], [1, 2, 3])
+        self.assertEqual(self.panel.selected_rows(), [0])
+
+    def test_end_placeholder_remains_reachable_in_grid_and_filmstrip(self):
+        self.add_all()
+        self.panel.add_slides(self.panel.output_slides * 3)
+        view, model = self.panel.view, self.panel.model
+        for mode in (0, 1):
+            with self.subTest(mode=mode):
+                self.panel.view_mode.setCurrentIndex(mode)
+                view.doItemsLayout()
+                view.scrollTo(model.index(model.rowCount() - 1, 0))
+                QTest.qWait(30)
+                last = view.visualRect(model.index(model.rowCount() - 1, 0))
+                point = QPoint(min(view.viewport().width() - 2, last.right() - 2), last.center().y())
+                self.assertTrue(self.hover(self.source_mime([0]), point))
+                self.assertIsNone(view._preview_order[-1])
+                bar = view.verticalScrollBar() if mode == 0 else view.horizontalScrollBar()
+                bar.setValue(bar.maximum())
+                QTest.qWait(30)
+                slot = view._slot_rect(len(view._preview_order) - 1)
+                slot.translate(-view.horizontalScrollBar().value(), -view.verticalScrollBar().value())
+                self.assertTrue(view.viewport().rect().contains(slot), (slot, view.viewport().rect()))
+                self.app.sendEvent(view.viewport(), QDragLeaveEvent())
+                self.assertEqual(model.rowCount(), 12)
 
     def test_output_drop_moves_discontiguous_rows_once(self):
         self.add_all()

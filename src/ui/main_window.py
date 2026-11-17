@@ -18,7 +18,7 @@ from src.ppt.thumbnail_service import ThumbnailProgress, ThumbnailResult, Thumbn
 from src.ui.slide_grid import ElidedLabel, SlideGrid
 from src.ui.source_panel import SourcePanel
 from src.ui.icons import icon
-from src.ui.theme import ACCENT_HOVER, SURFACE
+from src.ui.theme import SURFACE
 from src.ui.output_panel import OutputPanel
 from src.utils.path_preferences import PathPreferences
 from src.utils.workspace_store import WorkspaceStore
@@ -79,6 +79,7 @@ class MainWindow(QMainWindow):
         toolbar = self.toolbar = QToolBar('주요 작업')
         toolbar.setMovable(False)
         toolbar.setObjectName('mainToolbar')
+        toolbar.setFixedHeight(64)
         toolbar.setIconSize(QSize(18, 18))
         toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.addToolBar(toolbar)
@@ -94,6 +95,8 @@ class MainWindow(QMainWindow):
         self.add_action.setShortcut(QKeySequence('Ctrl+Shift+O'))
         self.add_action.triggered.connect(self.choose_files)
         toolbar.addAction(self.add_action)
+        for action in (self.file_add_action, self.add_action):
+            toolbar.widgetForAction(action).setFixedHeight(36)
         self.remove_action = QAction(icon('remove'), '목록에서 제거', self)
         self.remove_action.triggered.connect(self.remove_selected)
         self.clear_action = QAction(icon('clear'), '자료 목록 비우기', self)
@@ -108,7 +111,7 @@ class MainWindow(QMainWindow):
         container = QWidget()
         container.setObjectName('appShell')
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(16, 0, 16, 8)
+        layout.setContentsMargins(12, 0, 12, 4)
         layout.setSpacing(0)
         self.notice = QLabel()
         self.notice.setObjectName('notice')
@@ -129,7 +132,9 @@ class MainWindow(QMainWindow):
         self.root_label.setAccessibleName('최상위 폴더 경로')
         self.source_panel.browser_page.layout().insertWidget(0, self.root_label)
         source_tools = QHBoxLayout()
-        source_tools.addWidget(QLabel('자료 관리'))
+        source_tools_label = QLabel('자료 관리')
+        source_tools_label.setObjectName('mutedText')
+        source_tools.addWidget(source_tools_label)
         source_tools.addStretch()
         self.source_menu_button = QToolButton()
         self.source_menu_button.setIcon(icon('more'))
@@ -167,7 +172,7 @@ class MainWindow(QMainWindow):
         self.generate_button = QPushButton('PPT로 저장')
         self.generate_button.setObjectName('primaryButton')
         self.generate_button.setIcon(icon('file', foreground=SURFACE))
-        self.generate_button.setFixedHeight(38)
+        self.generate_button.setFixedHeight(36)
         self.generate_button.clicked.connect(self.choose_output)
         toolbar.addWidget(self.generate_button)
         self.save_action = QAction(self)
@@ -182,7 +187,13 @@ class MainWindow(QMainWindow):
         workspace_layout.setContentsMargins(0, 0, 0, 0)
         workspace_layout.setSpacing(0)
         mode_bar = QHBoxLayout()
-        mode_bar.setContentsMargins(20, 12, 20, 8)
+        mode_bar.setContentsMargins(20, 14, 20, 14)
+        self.mode_switch = QWidget()
+        self.mode_switch.setObjectName('modeSwitch')
+        self.mode_switch.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        mode_switch_layout = QHBoxLayout(self.mode_switch)
+        mode_switch_layout.setContentsMargins(3, 3, 3, 3)
+        mode_switch_layout.setSpacing(2)
         self.mode_group = QButtonGroup(self)
         self.mode_buttons = {}
         for mode, caption in (('both', '나란히 보기'), ('source', '원본 보기'), ('result', '결과 편집 · 0장')):
@@ -193,7 +204,8 @@ class MainWindow(QMainWindow):
             self.mode_group.addButton(button)
             self.mode_buttons[mode] = button
             button.clicked.connect(lambda checked=False, m=mode: self.set_workspace_mode(m))
-            mode_bar.addWidget(button)
+            mode_switch_layout.addWidget(button)
+        mode_bar.addWidget(self.mode_switch)
         mode_bar.addStretch()
         workspace_layout.addLayout(mode_bar)
         self.composer = QSplitter(Qt.Orientation.Horizontal)
@@ -217,10 +229,11 @@ class MainWindow(QMainWindow):
         layout.addWidget(splitter, 1)
 
         self.output_toggle_action = QAction('결과 크게 보기', self)
+        self.output_toggle_action.setIcon(icon('expand'))
         self.output_toggle_action.triggered.connect(self._toggle_output_panel)
         self.output_toggle_button = QToolButton(self.output_panel)
         self.output_toggle_button.setDefaultAction(self.output_toggle_action)
-        self.output_toggle_button.setIcon(icon('expand'))
+        self.output_toggle_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.output_toggle_button.setFixedSize(32, 32)
         self.output_toggle_button.setAccessibleName('결과 크게 보기')
         self.output_panel.header.addWidget(self.output_toggle_button)

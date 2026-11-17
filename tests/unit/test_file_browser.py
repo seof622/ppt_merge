@@ -133,6 +133,7 @@ class MainSidebarTests(unittest.TestCase):
         self.window.close()
         wait_until(lambda: not self.window.is_busy and not self.panel.has_search)
         self.app.processEvents()
+        ui.dispose_widget(self.window)
         self.temporary.cleanup()
 
     def index(self, path):

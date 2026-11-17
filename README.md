@@ -1,5 +1,9 @@
 # PPT Merge
 
+2026-11-17: 썸네일 중심 카드, 글자 위계, 묶음형 보기 전환을 적용하고 배경·결과 영역·버튼·PPT 아이콘·배지를 밝은 블루 계열로 통일했습니다. 창·모델을 QApplication보다 먼저 해제하도록 종료 순서를 정리했고, 전체 단위·Qt 검사 163개와 앱 종료 프로세스 검사를 정상 종료 코드까지 확인했습니다. 최종 색상 보완 후 관련 검사 27개도 정상 종료했습니다. [화면 다듬기와 종료 안정성](docs/refined_workspace.md)을 참고하세요.
+
+드래그할 때는 세로 삽입선 대신 슬라이드 크기의 빈 카드가 놓을 위치·장수를 표시하고 주변 카드가 부드럽게 이동합니다. 실제 순서는 드롭할 때 확정하며 취소 시 유지됩니다. 격자·가로 목록·빈 결과 및 종료를 포함한 관련 검사 32개가 정상 종료했습니다.
+
 2026-11-16: 자료 탭 통합, 원본·결과 나란히 보기, 중립색·파란 강조 테마, 격자 편집, 실행 취소·다시 실행, 썸네일 확대, 현재 PPT의 제목·본문 검색, 작업 자동 저장·복원을 적용했습니다. 사용법과 검증 범위는 [슬라이드 구성 중심 UI](docs/modern_workspace.md)를 참고하세요. 아래의 베이지 테마 및 하단 결과 패널 설명은 이전 버전 기록입니다.
 
 여러 PowerPoint 파일에서 선택한 슬라이드를 원하는 순서로 결합하는 Windows 데스크톱 앱입니다. 개발 기준은 [AGENT.md](AGENT.md)를 따릅니다.
@@ -138,8 +142,8 @@ PowerPoint를 닫은 상태에서 실행합니다. 기본 PPT는 `tests/fixtures
 앱 서비스는 `src/ppt/thumbnail_service.py`, COM 세션 관리는 `src/ppt/presentation_manager.py`에 있습니다. CLI와 UI는 워커에서 서비스를 실행하며 결과에는 일반 dataclass 데이터만 담습니다. UI의 QThread 연결은 `src/workers/ppt_worker.py`에 있습니다.
 
 ```powershell
-# PowerPoint 설치 없이 캐시 로직 검증
-.\.venv\Scripts\python.exe -m unittest discover -s tests/unit -v
+# PowerPoint 설치 없이 단위·Qt UI 검증 및 Qt 리소스 정리
+.\.venv\Scripts\python.exe -X utf8 scripts/run_tests.py
 
 # PowerPoint를 닫은 상태에서 실제 Office 통합 검증
 $env:PPT_MERGE_COM_TESTS = '1'

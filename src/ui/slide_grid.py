@@ -10,8 +10,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel, QListView
 from src.models.presentation_model import PresentationInfo
 from src.models.slide_model import SlideItem
 from src.ui.slide_mime import SLIDE_MIME, make_slide_mime
-from src.ui.icons import icon_button
-from src.ui.slide_delegate import SlideCardDelegate, drag_image
+from src.ui.icons import icon
+from src.ui.slide_delegate import SlideCardDelegate, drag_image, slide_card_size
 from src.ui.slide_preview import open_preview
 
 
@@ -45,7 +45,7 @@ class SlideListModel(QAbstractListModel):
     def __init__(self, parent=None, drag_token: str = "") -> None:
         super().__init__(parent)
         self.drag_token = drag_token
-        self.card_size = QSize(276, 210)
+        self.card_size = slide_card_size(240)
         self.slides: tuple[SlideItem, ...] = ()
         self._icons: OrderedDict[int, QIcon] = OrderedDict()
         self.usage_counts = {}
@@ -131,7 +131,7 @@ class SlideGrid(QWidget):
         self._usage_counts = {}
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setContentsMargins(20, 20, 20, 16)
         layout.setSpacing(12)
         title = QLabel('원본 슬라이드')
         title.setObjectName('sectionTitle')
@@ -149,11 +149,17 @@ class SlideGrid(QWidget):
         self.add_button.clicked.connect(self.add_selected)
         layout.addLayout(header)
         self.search = QLineEdit()
+        self.search.setObjectName('slideSearch')
+        self.search.setFixedHeight(36)
+        self.search.addAction(icon('search'), QLineEdit.ActionPosition.LeadingPosition)
         self.search.setPlaceholderText('이 PPT의 슬라이드 제목·내용 검색')
         self.search.setAccessibleName('현재 PPT의 슬라이드 제목과 본문 검색')
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._filter_slides)
         layout.addWidget(self.search)
+        hint = QLabel('더블클릭으로 담기 · 결과 영역으로 드래그')
+        hint.setObjectName('mutedText')
+        layout.addWidget(hint)
         self.stack = QStackedWidget()
         self.empty = QLabel()
         self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -190,14 +196,17 @@ class SlideGrid(QWidget):
         layout.addWidget(self.stack, 1)
         controls = QHBoxLayout()
         self.preview_button = QPushButton('확대 보기')
+        self.preview_button.setObjectName('quietButton')
         self.preview_button.setToolTip('선택한 슬라이드 크게 보기 · Space')
         self.preview_button.clicked.connect(lambda: open_preview(self.view))
         controls.addWidget(self.preview_button)
         controls.addStretch()
-        controls.addWidget(QLabel('크기'))
+        zoom_label = QLabel('크기')
+        zoom_label.setObjectName('mutedText')
+        controls.addWidget(zoom_label)
         self.zoom = QSlider(Qt.Orientation.Horizontal)
         self.zoom.setRange(160, 300)
-        self.zoom.setValue(220)
+        self.zoom.setValue(240)
         self.zoom.setMaximumWidth(110)
         self.zoom.setAccessibleName('원본 썸네일 크기')
         self.zoom.valueChanged.connect(self._resize_cards)
@@ -208,7 +217,7 @@ class SlideGrid(QWidget):
         self.all_button.clicked.connect(lambda: self.add_requested.emit(self.model.slides))
         actions.addWidget(self.all_button)
         actions.addWidget(self.add_button, 1)
-        self.add_button.setObjectName('primaryButton')
+        self.add_button.setObjectName('addSlidesButton')
         layout.addLayout(actions)
         shortcut = QShortcut(QKeySequence('Space'), self.view)
         shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
@@ -236,11 +245,13 @@ class SlideGrid(QWidget):
         self._resize_cards()
 
     def _resize_cards(self, *args):
-        width = self.zoom.value() if hasattr(self, 'zoom') else 220
+        width = self.zoom.value() if hasattr(self, 'zoom') else 240
         available = self.view.viewport().height() - 2 * self.view.spacing() - 4
-        if available > 120:
-            width = min(width, max(120, int((available - 88) * 16 / 9)))
-        size = QSize(width + 24, round(width * 9 / 16) + 88)
+        if available > 0:
+            width = min(width, max(80, int((available - 44) * 16 / 9)))
+        # 좁은 패널에서도 카드의 좌우가 잘리지 않게 한다.
+        width = min(width, max(100, self.view.viewport().width() - 2 * self.view.spacing() - 16))
+        size = slide_card_size(width)
         if self.model.card_size != size:
             self.model.card_size = size
             self.view.setIconSize(QSize(width, round(width * 9 / 16)))
