@@ -90,6 +90,8 @@ class SlideCardDelegate(QStyledItemDelegate):
             painter.setFont(font)
             painter.setPen(QColor(MUTED))
             detail = f'{Path(slide.source_file_name).stem} · 원본 {slide.slide_index}'
+            if slide.background is not None:
+                detail = f'{model.background_preview_text(slide)} · {detail}'
             detail_rect = QRect(caption.left(), caption.bottom(), caption.width(), 20)
             painter.drawText(detail_rect, Qt.AlignmentFlag.AlignVCenter,
                              painter.fontMetrics().elidedText(detail, Qt.TextElideMode.ElideRight,

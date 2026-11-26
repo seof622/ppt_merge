@@ -48,10 +48,11 @@ class Recorder:
                 recorder.slide_size_reads.append((index, slide_id))
                 return recorder.size
 
-            def export_slide(self, path, index, target, width, height):
+            def export_slide(self, path, index, target, width, height, *, background=None):
                 if recorder.fail_at == index:
                     raise ThumbnailError("의도적 내보내기 오류")
-                Image.new("RGB", (width, height), (index * 50, 20, 100)).save(target, "PNG")
+                color = background.color if background is not None else (index * 50, 20, 100)
+                Image.new("RGB", (width, height), color).save(target, "PNG")
                 recorder.exported.append(index)
 
         return Backend()

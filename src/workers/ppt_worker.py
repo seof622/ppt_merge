@@ -99,6 +99,28 @@ class PreviewWorker(QObject):
             self.finished.emit()
 
 
+class BackgroundPreviewWorker(PreviewWorker):
+    @Slot()
+    def run(self):
+        remaining = dict.fromkeys(self.slide)
+        try:
+            service = self.service_factory()
+            for slide, result in service.load_background_previews(self.slide, cancel=self._cancel.is_set):
+                if isinstance(result, PowerPointError):
+                    self.failed.emit(slide, str(result))
+                else:
+                    self.loaded.emit(slide, result)
+                remaining.pop(slide, None)
+        except OperationCancelled:
+            pass
+        except Exception:
+            LOGGER.exception("배경 미리보기 준비 실패")
+            for slide in remaining:
+                self.failed.emit(slide, "배경 미리보기를 준비하지 못했습니다. 로그를 확인하세요.")
+        finally:
+            self.finished.emit()
+
+
 class GenerationWorker(QObject):
     """생성 준비와 실행을 각각 QThread에서 처리한다."""
 

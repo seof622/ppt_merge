@@ -27,6 +27,7 @@ dist/
 !.env.*.example
 /settings.ini
 /workspace.json
+/workspace_assets/
 
 # 실행 중 생성되는 파일 (빈 폴더는 유지)
 /cache/*

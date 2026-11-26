@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, nullcontext
+from dataclasses import asdict, dataclass, field, replace
 import hashlib
 import json
 import logging
@@ -18,12 +19,13 @@ from typing import Any, Protocol
 from PIL import Image
 
 from src.models.presentation_model import PresentationInfo
-from src.models.slide_model import SlideItem
-from src.ppt.errors import (CancelCallback, OperationCancelled, PresentationOpenError,
+from src.models.slide_model import SlideBackground, SlideItem
+from src.ppt.errors import (CancelCallback, OperationCancelled, PowerPointError, PresentationOpenError,
                             SourceChangedError, ThumbnailError, check_cancel, file_error_message)
 from src.ppt.source_validation import (check_source_file, file_hash as _file_hash, fingerprint as _fingerprint,
                                        validate_source as _validate_source, revision)
 from src.ppt.presentation_manager import PresentationManager
+from src.ppt.slide_background import validate_background_image
 
 LOGGER = logging.getLogger("ppt_merge.thumbnails")
 CACHE_VERSION = 1
@@ -34,7 +36,8 @@ class ThumbnailBackend(Protocol):
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None: ...
     def read_presentation(self, path: Path, cancel: CancelCallback | None = None) -> PresentationInfo: ...
     def read_slide_size(self, path: Path, index: int, slide_id: int) -> tuple[float, float]: ...
-    def export_slide(self, path: Path, index: int, target: Path, width: int, height: int) -> None: ...
+    def export_slide(self, path: Path, index: int, target: Path, width: int, height: int,
+                     *, background: SlideBackground | None = None) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -172,7 +175,33 @@ class ThumbnailService:
             LOGGER.exception("확대 미리보기 파일 작업 실패 %s", slide.source_file)
             raise ThumbnailError(file_error_message(error)) from error
 
-    def _load_preview(self, slide: SlideItem, cancel: CancelCallback | None) -> str:
+    def load_background_previews(self, slides: tuple[SlideItem, ...],
+                                 cancel: CancelCallback | None = None) -> Iterator[tuple[SlideItem, str | PowerPointError]]:
+        """화면에 보이는 배경 변경 항목을 한 PowerPoint 세션에서 내보낸다."""
+        backend = None
+        validated_sources = {}
+        with ExitStack() as stack:
+            def open_backend():
+                nonlocal backend
+                if backend is None:
+                    backend = stack.enter_context(self._backend_factory())
+                return nullcontext(backend)
+
+            for slide in slides:
+                check_cancel(cancel)
+                try:
+                    result = self._load_preview(slide, cancel, open_backend, validated_sources)
+                except OperationCancelled:
+                    raise
+                except PowerPointError as error:
+                    result = error
+                except OSError as error:
+                    LOGGER.exception("배경 미리보기 파일 작업 실패 %s", slide.source_file)
+                    result = ThumbnailError(file_error_message(error))
+                yield slide, result
+
+    def _load_preview(self, slide: SlideItem, cancel: CancelCallback | None,
+                      open_backend=None, validated_sources=None) -> str:
         path = Path(slide.source_file).resolve()
         source_stat = check_source_file(path, cancel)
         source = _fingerprint(path, cancel)
@@ -180,6 +209,11 @@ class ThumbnailService:
             raise SourceChangedError("원본 PPT가 변경되었습니다. 다시 읽은 뒤 확대해 주세요.")
         identity = {"version": CACHE_VERSION, "source": source, "width": self.width,
                     "slide_id": slide.slide_id, "slide_index": slide.slide_index}
+        image_path = slide.background.image_path if slide.background is not None else None
+        if image_path is not None:
+            validate_background_image(image_path, cancel)
+        if slide.background is not None:
+            identity["background"] = asdict(slide.background)
         key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
         root = self.cache_root / "previews"
         directory = root / key
@@ -205,19 +239,28 @@ class ThumbnailService:
             raise ThumbnailError("이 슬라이드의 확대 미리보기를 이미 준비 중입니다.") from error
         os.close(descriptor)
         try:
-            _validate_source(path, cancel)
+            if validated_sources is None or validated_sources.get(path) != source:
+                _validate_source(path, cancel)
+                if validated_sources is not None:
+                    validated_sources[path] = source
             _check_preview_source(path, source_stat)
             with tempfile.TemporaryDirectory(prefix=".preview-", dir=root) as temporary:
                 staging = Path(temporary)
-                with self._backend_factory() as backend:
+                with (open_backend or self._backend_factory)() as backend:
                     check_cancel(cancel)
                     width_points, height_points = backend.read_slide_size(path, slide.slide_index, slide.slide_id)
                     width, height = _dimensions(width_points, height_points, self.width)
                     check_cancel(cancel)
-                    backend.export_slide(path, slide.slide_index, staging / "slide.png", width, height)
+                    if slide.background is None:
+                        backend.export_slide(path, slide.slide_index, staging / "slide.png", width, height)
+                    else:
+                        backend.export_slide(path, slide.slide_index, staging / "slide.png", width, height,
+                                             background=slide.background)
                 check_cancel(cancel)
                 if _fingerprint(path, cancel) != source:
                     raise SourceChangedError("미리보기 생성 중 원본 PPT가 변경되었습니다.")
+                if image_path is not None:
+                    validate_background_image(image_path, cancel)
                 if not _valid_image(staging / "slide.png", width, height):
                     raise ThumbnailError("확대 미리보기 이미지가 올바르지 않습니다.")
                 manifest = {"identity": identity, "width": width, "height": height,

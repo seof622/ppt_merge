@@ -20,7 +20,7 @@ class WorkspaceStore:
             if data.get('version') != 1:
                 return [], []
             sources = data['sources']
-            slides = [SlideItem(**item) for item in data['slides']]
+            slides = [SlideItem.from_dict(item) for item in data['slides']]
             if (not isinstance(sources, list) or any(not isinstance(p, str) for p in sources)
                     or any(type(s.slide_index) is not int or s.slide_index < 1
                            or type(s.slide_id) is not int or not isinstance(s.source_file, str)

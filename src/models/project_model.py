@@ -1,9 +1,9 @@
 """Qt나 COM에 의존하지 않는 출력 순서 편집 데이터."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from collections.abc import Iterable
 
-from src.models.slide_model import SlideItem
+from src.models.slide_model import SlideBackground, SlideItem
 
 
 @dataclass
@@ -41,6 +41,10 @@ class OutputSequence:
             self.slides.insert(position, self.slides[position - 1])
             copies.append(position)
         return copies
+
+    def set_background(self, rows: Iterable[int], background: SlideBackground | None) -> None:
+        for row in self._rows(rows):
+            self.slides[row] = replace(self.slides[row], background=background)
 
     def move(self, rows: Iterable[int], target: int) -> list[int]:
         """삭제 전 목록의 경계 위치로 선택 항목을 순서대로 이동한다."""

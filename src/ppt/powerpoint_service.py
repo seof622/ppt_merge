@@ -20,6 +20,7 @@ from src.ppt.errors import (CancelCallback, GenerationError, PowerPointError,
                             SourceChangedError, check_cancel, file_error_message)
 from src.ppt.presentation_manager import PresentationManager
 from src.ppt.background_preservation import restore_slide_backgrounds
+from src.ppt.slide_background import validate_background_image
 from src.ppt.source_validation import file_hash, fingerprint, revision, validate_source
 
 LOGGER = logging.getLogger("ppt_merge.generation")
@@ -103,6 +104,7 @@ class PowerPointService:
                 if _same_path(source, path):
                     raise GenerationError("원본 PowerPoint 파일에는 저장할 수 없습니다. 다른 경로를 선택하세요.")
                 groups.setdefault(source, []).append(slide)
+            self._check_background_images(selection, cancel)
             sources = []
             for completed, (source, items) in enumerate(groups.items(), 1):
                 check_cancel(cancel)
@@ -156,6 +158,7 @@ class PowerPointService:
         try:
             check_cancel(cancel)
             self._check_sources(plan, cancel)
+            self._check_background_images(plan.slides, cancel)
             self._check_output(plan, cancel)
             # Office가 OneDrive 경로를 클라우드 URL로 바꾸지 않도록 로컬 임시 폴더에 저장한다.
             with tempfile.TemporaryDirectory(prefix="ppt_merge-", dir=self._work_root) as folder:
@@ -169,6 +172,7 @@ class PowerPointService:
                 check_cancel(cancel)
                 report("verifying", len(plan.slides))
                 self._check_sources(plan, cancel)
+                self._check_background_images(plan.slides, cancel)
                 restored = restore_slide_backgrounds(plan.slides, temporary, cancel)
                 LOGGER.info("원본 개별 배경 복원 %s장", restored)
                 self._verify_result(temporary, len(plan.slides))
@@ -219,6 +223,13 @@ class PowerPointService:
             path = Path(source.path)
             if not path.is_file() or revision(fingerprint(path, cancel)) != source.revision:
                 raise SourceChangedError(f"원본이 없어졌거나 변경되었습니다: {path.name}. 다시 읽고 담아 주세요.")
+
+    @staticmethod
+    def _check_background_images(slides: tuple[SlideItem, ...], cancel: CancelCallback | None) -> None:
+        images = {item.background.image_path for item in slides
+                  if item.background is not None and item.background.image_path is not None}
+        for image_path in images:
+            validate_background_image(image_path, cancel)
 
     def _check_output(self, plan: GenerationPlan, cancel: CancelCallback | None) -> None:
         path = Path(plan.output_path)

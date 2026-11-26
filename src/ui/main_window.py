@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import os
 from pathlib import Path
 from uuid import uuid4
@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (QButtonGroup, QFileDialog, QHBoxLayout, QLabel, Q
                                QToolButton, QVBoxLayout, QMessageBox, QWidget)
 
 from src.ppt.thumbnail_service import ThumbnailProgress, ThumbnailResult, ThumbnailService
+from src.ui.background_previews import BackgroundPreviews
 from src.ui.slide_grid import ElidedLabel, SlideGrid
 from src.ui.source_panel import SourcePanel
 from src.ui.icons import icon
@@ -39,7 +40,8 @@ class MainWindow(QMainWindow):
 
     def __init__(self, cache_root: Path,
                  service_factory: Callable[[], ThumbnailService] | None = None,
-                 generation_service_factory: Callable[[], PowerPointService] | None = None) -> None:
+                 generation_service_factory: Callable[[], PowerPointService] | None = None, *,
+                 background_preview_factory: Callable[[], ThumbnailService] | None = None) -> None:
         super().__init__()
         self.setWindowTitle("PPT Merge · 슬라이드 결합")
         self.resize(1600, 900)
@@ -64,6 +66,7 @@ class MainWindow(QMainWindow):
         self._last_saved_result: GenerationResult | None = None
         self._saved_sequence = None
         self._preview_dialogs = set()
+        self._open_output_after_preview = False
         self._preview_factory = (lambda: ThumbnailService(cache_root, width=1600)) if service_factory is None else None
         self._browser_root: Path | None = None
         self._path_preferences = PathPreferences(cache_root.parent / "settings.ini")
@@ -156,7 +159,8 @@ class MainWindow(QMainWindow):
         drag_token = uuid4().hex
         self.slide_grid = SlideGrid(drag_token=drag_token)
         self.slide_grid.add_files_requested.connect(self.choose_presentations)
-        self.output_panel = OutputPanel(drag_token=drag_token)
+        self.output_panel = OutputPanel(drag_token=drag_token,
+                                        background_directory=cache_root.parent / "workspace_assets" / "backgrounds")
         self.slide_grid.add_requested.connect(self.output_panel.add_slides)
         stack = self.output_panel.model.undo_stack
         self.undo_action = stack.createUndoAction(self, '실행 취소')
@@ -288,6 +292,11 @@ class MainWindow(QMainWindow):
         self.source_panel.search_finished.connect(self._sidebar_search_finished)
         self._root_changed(str(self.source_panel.root_path), remember=False)
         self.source_panel.root_changed.connect(self._root_changed)
+        if background_preview_factory is None and service_factory is None:
+            background_preview_factory = self._service_factory
+        self._background_previews = BackgroundPreviews(self, self.output_panel.model, background_preview_factory,
+                                                       self._can_start_background_previews)
+        self._background_previews.finished.connect(self._background_previews_finished)
         self.output_panel.model.modelReset.connect(self._output_changed)
         self.output_panel.model.feedback.connect(self._on_output_feedback)
         self._update_actions()
@@ -394,7 +403,7 @@ class MainWindow(QMainWindow):
                           and slide.slide_index == saved.slide_index
                           and slide.source_revision == saved.source_revision), None)
             if match is not None:
-                restored.append(match)
+                restored.append(replace(match, background=saved.background))
         skipped = len(self._restore_slides) - len(restored)
         self.output_panel.model.restore(restored)
         self.output_panel.model.undo_stack.clear()
@@ -418,11 +427,32 @@ class MainWindow(QMainWindow):
 
     @property
     def is_generating(self) -> bool:
-        return self._generation_thread is not None
+        return self._generation_worker is not None
 
     @property
     def is_busy(self) -> bool:
         return self.is_loading or self.is_generating or any(d.is_loading for d in self._preview_dialogs)
+
+    def _can_start_background_previews(self) -> bool:
+        return not (self.is_busy or self._closing or self._restoring or self._pending or self._preview_dialogs)
+
+    @Slot()
+    def _background_previews_finished(self) -> None:
+        if self._generation_worker is not None and self._generation_thread is None:
+            if self._generation_cancelling or self._closing:
+                self._generation_worker.deleteLater()
+                self._on_generation_cancelled()
+                self._generation_finished()
+            else:
+                self._launch_generation_worker(self._generation_worker)
+        elif self._closing:
+            if not self.is_busy:
+                QTimer.singleShot(0, self.close)
+        else:
+            if self._open_output_after_preview:
+                self._open_output_after_preview = False
+                self._open_output_file()
+            self._start_pending()
 
     def _preview_released(self, dialog) -> None:
         self._preview_dialogs.discard(dialog)
@@ -440,6 +470,10 @@ class MainWindow(QMainWindow):
 
     def _open_output_file(self) -> None:
         if self.is_busy or self._closing or self._last_saved_result is None:
+            return
+        if self._background_previews.is_running:
+            self._open_output_after_preview = True
+            self._background_previews.cancel()
             return
         path = Path(self._last_saved_result.output_path)
         if not path.is_file():
@@ -493,6 +527,7 @@ class MainWindow(QMainWindow):
                          allow_mixed_sizes: bool | None = None) -> bool:
         if self.is_busy or self._closing or self._restoring or not self.output_panel.output_slides:
             return False
+        self._open_output_after_preview = False
         self._allow_mixed_sizes = allow_mixed_sizes
         self.last_generation_result = None
         self.notice.hide()
@@ -504,8 +539,19 @@ class MainWindow(QMainWindow):
         self._prepared_plan = None
         self._generation_outcome = ""
         self._generation_cancelling = False
+        self._generation_worker = worker
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.show()
+        self.cancel_button.setText("취소")
+        self.cancel_button.setEnabled(True)
+        self.cancel_button.show()
+        if self._background_previews.is_running:
+            self._background_previews.cancel()
+            self.status_text.setText("배경 미리보기 작업을 정리한 뒤 PPT를 생성합니다…")
+            self._update_actions()
+            return
         thread = QThread(self)
-        self._generation_thread, self._generation_worker = thread, worker
+        self._generation_thread = thread
         worker.moveToThread(thread)
         thread.started.connect(worker.run, Qt.ConnectionType.QueuedConnection)
         worker.prepared.connect(self._on_prepared, Qt.ConnectionType.QueuedConnection)
@@ -516,11 +562,6 @@ class MainWindow(QMainWindow):
         worker.finished.connect(thread.quit, Qt.ConnectionType.QueuedConnection)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(self._generation_finished, Qt.ConnectionType.QueuedConnection)
-        self.progress_bar.setRange(0, 0)
-        self.progress_bar.show()
-        self.cancel_button.setText("취소")
-        self.cancel_button.setEnabled(True)
-        self.cancel_button.show()
         self.status_text.setText("PPT 생성 작업을 준비합니다…")
         self._update_actions()
         thread.start()
@@ -687,6 +728,9 @@ class MainWindow(QMainWindow):
     def _start_pending(self) -> None:
         if self.is_busy or not self._pending or self._closing:
             return
+        if self._background_previews.is_running:
+            self._background_previews.cancel()
+            return
         self._loading_cancelling = False
         self._active = tuple(self._pending)
         self._pending.clear()
@@ -847,6 +891,8 @@ class MainWindow(QMainWindow):
         self.slide_grid.setEnabled(not self.is_generating and not self._closing and not self._restoring)
         self.source_panel.setEnabled(not self.is_generating and not self._closing)
         self.originals_panel.setEnabled(not self.is_generating and not self._closing)
+        if hasattr(self, '_background_previews'):
+            self._background_previews.schedule()
 
     def remove_selected(self) -> None:
         if self.is_busy or self._closing:
@@ -904,9 +950,10 @@ class MainWindow(QMainWindow):
         self._save_timer.stop()
         self._save_workspace()
         self.source_panel.shutdown_search()
+        self._background_previews.cancel()
         for dialog in tuple(self._preview_dialogs):
             dialog.close()
-        if self.is_busy or self.source_panel.has_search:
+        if self.is_busy or self.source_panel.has_search or self._background_previews.is_running:
             self.cancel_loading()
             self._update_actions()
             self.status_text.setText("진행 중인 작업을 정리한 뒤 창을 닫습니다…")

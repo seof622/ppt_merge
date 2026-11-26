@@ -74,6 +74,9 @@ class SlideListModel(QAbstractListModel):
     def supportedDragActions(self):
         return Qt.DropAction.CopyAction
 
+    def _thumbnail_path(self, slide: SlideItem) -> str | None:
+        return slide.thumbnail_path
+
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid() or not 0 <= index.row() < len(self.slides):
             return None
@@ -89,7 +92,7 @@ class SlideListModel(QAbstractListModel):
         if role == Qt.ItemDataRole.DecorationRole:
             number = index.row()
             if number not in self._icons:
-                pixmap = QPixmap(slide.thumbnail_path or "")
+                pixmap = QPixmap(self._thumbnail_path(slide) or "")
                 if not pixmap.isNull():
                     pixmap = pixmap.scaled(360, 220, Qt.AspectRatioMode.KeepAspectRatio,
                                            Qt.TransformationMode.SmoothTransformation)

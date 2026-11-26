@@ -7,13 +7,17 @@ from unittest.mock import patch
 
 from PIL import Image
 from PySide6.QtCore import QPoint, Qt
+from PySide6.QtGui import QColor
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QFileDialog, QPushButton
+from PySide6.QtWidgets import QColorDialog, QFileDialog, QPushButton
 from shiboken6 import isValid
 from src.ppt.errors import ThumbnailError, check_cancel
 from src.ppt.powerpoint_service import GenerationResult
+from src.models.slide_model import SlideBackground
+from src.ui.main_window import MainWindow
 from src.ui.slide_preview import open_preview
 import test_ui as fixture
+from test_generation_ui import FakeGeneration
 
 
 class UiRefinementTests(unittest.TestCase):
@@ -25,6 +29,8 @@ class UiRefinementTests(unittest.TestCase):
         for dialog in tuple(self.window._preview_dialogs):
             dialog.close()
         fixture.wait_until(lambda: not self.window._preview_dialogs)
+        self.window.close()
+        fixture.wait_until(lambda: not self.window.isVisible())
         fixture.UiTests.tearDown(self)
 
     def test_ppt_dirty_state_survives_autosave_and_undo_restores_saved_snapshot(self):
@@ -98,6 +104,114 @@ class UiRefinementTests(unittest.TestCase):
         self.assertEqual(panel.selected_name.text(), source.name)
         self.assertEqual(panel.selected_name.toolTip(), str(source.resolve()))
         self.assertTrue(panel.selected_name.isVisible())
+
+    def test_output_background_scope_undo_restore_and_autosave(self):
+        self.load(self.a)
+        panel = self.window.output_panel
+        first, second, _ = self.window.slide_grid.model.slides
+        panel.add_slides((first, first, second))
+        panel.select_rows([1])
+        selected_menu, all_menu = [action.menu() for action in panel.background_button.menu().actions()]
+        with patch.object(QColorDialog, 'getColor', return_value=QColor('#D25A24')):
+            selected_menu.actions()[0].trigger()
+        self.assertEqual([item.background.color if item.background else None for item in panel.output_slides],
+                         [None, '#D25A24', None])
+        self.assertEqual(panel.selected_rows(), [1])
+        self.assertIsNone(self.window.slide_grid.model.slides[0].background)
+
+        image = self.root / '배경.png'
+        Image.new('RGB', (128, 72), '#346854').save(image)
+        with patch.object(QFileDialog, 'getOpenFileName', return_value=(str(image), '')):
+            all_menu.actions()[1].trigger()
+        background = panel.output_slides[0].background
+        self.assertEqual([item.background for item in panel.output_slides], [background] * 3)
+        self.assertEqual(Path(background.image_path).read_bytes(), image.read_bytes())
+        self.assertNotEqual(Path(background.image_path), image)
+
+        panel.model.undo_stack.undo()
+        self.assertEqual(panel.output_slides[1].background.color, '#D25A24')
+        panel.model.undo_stack.redo()
+        self.window._save_workspace()
+        self.assertEqual(self.window._workspace_store.load()[1], panel.output_slides)
+        selected_menu.actions()[-1].trigger()
+        self.assertEqual([item.background for item in panel.output_slides], [background, None, background])
+        all_menu.actions()[-1].trigger()
+        self.assertEqual([item.background for item in panel.output_slides], [None, None, None])
+
+    def test_background_change_refreshes_the_card_and_zoom_fallback(self):
+        path = self.root / 'background-result.png'
+        Image.new('RGB', (480, 270), '#C85A30').save(path)
+
+        class BackgroundPreviewService:
+            def load_background_previews(self, slides, cancel=None):
+                for slide in slides:
+                    yield slide, str(path)
+
+        self.window.close()
+        self.window.deleteLater()
+        self.window = MainWindow(self.root / 'cache', self.factory,
+                                 background_preview_factory=BackgroundPreviewService)
+        self.window.show()
+        self.window.set_workspace_mode('result')
+        self.load(self.a)
+        panel = self.window.output_panel
+        panel.add_slides(self.window.slide_grid.model.slides)
+        panel.select_rows([0])
+        panel._change_background(SlideBackground(color='#C85A30'), False)
+        changed = panel.output_slides[0]
+        fixture.wait_until(lambda: panel.model.background_thumbnail(changed) is not None)
+        fixture.wait_until(lambda: not self.window._background_previews.is_running)
+        index = panel.model.index(0, 0)
+        icon = panel.model.data(index, Qt.ItemDataRole.DecorationRole)
+        self.assertEqual(icon.pixmap(160, 90).toImage().pixelColor(10, 10).name(), '#c85a30')
+        dialog = open_preview(panel.view)
+        self.assertEqual(dialog.image.pixmap().toImage().pixelColor(10, 10).name(), '#c85a30')
+        self.assertEqual(dialog.quality.text(), '배경 미리보기')
+        dialog.close()
+        panel.model.undo_stack.undo()
+        icon = panel.model.data(panel.model.index(0, 0), Qt.ItemDataRole.DecorationRole)
+        self.assertEqual(icon.pixmap(160, 90).toImage().pixelColor(10, 10).name(), '#dbeafe')
+
+    def test_saving_takes_priority_over_active_background_cards(self):
+        started = threading.Event()
+        cleaned = threading.Event()
+        resume = threading.Event()
+        generator = FakeGeneration()
+
+        class BackgroundPreviewService:
+            def load_background_previews(self, slides, cancel=None):
+                if not started.is_set():
+                    started.set()
+                    try:
+                        resume.wait(5)
+                        check_cancel(cancel)
+                    finally:
+                        cleaned.set()
+                for slide in slides:
+                    yield slide, slide.thumbnail_path
+
+        self.window.close()
+        self.window.deleteLater()
+        self.window = MainWindow(self.root / 'cache', self.factory, lambda: generator,
+                                 background_preview_factory=BackgroundPreviewService)
+        self.window.show()
+        self.load(self.a)
+        panel = self.window.output_panel
+        panel.add_slides(self.window.slide_grid.model.slides)
+        panel._change_background(SlideBackground(color='#C85A30'), True)
+        output = self.root / 'result.pptx'
+        try:
+            fixture.wait_until(started.is_set)
+            self.assertTrue(self.window.generate_button.isEnabled())
+            self.assertTrue(self.window.start_generation(output))
+            self.assertTrue(self.window.is_generating)
+            self.assertIsNone(generator.prepared)
+        finally:
+            resume.set()
+        fixture.wait_until(lambda: not self.window.is_generating)
+        self.assertTrue(cleaned.is_set())
+        self.assertTrue(output.exists())
+        self.assertEqual(generator.generated.slides, tuple(panel.output_slides))
 
     def preview(self, factory):
         self.load(self.a)

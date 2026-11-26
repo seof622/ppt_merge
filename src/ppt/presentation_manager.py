@@ -11,12 +11,13 @@ import time
 from typing import Any
 
 from src.models.presentation_model import PresentationInfo
-from src.models.slide_model import SlideItem
+from src.models.slide_model import SlideBackground, SlideItem
 from src.ppt.errors import (CancelCallback, PowerPointBusyError, PowerPointError,
                             PresentationOpenError, SourceChangedError, ThumbnailError,
                             GenerationError, check_cancel)
 from src.utils.process_utils import process_pids
 from src.ppt.internal_links import InternalLinkError, read_internal_links, reconnect_internal_links
+from src.ppt.slide_background import set_slide_background
 
 LOGGER = logging.getLogger("ppt_merge.powerpoint")
 
@@ -149,11 +150,15 @@ class PresentationManager:
         finally:
             presentation = slides = page_setup = None
 
-    def export_slide(self, path: Path, index: int, target: Path, width: int, height: int) -> None:
+    def export_slide(self, path: Path, index: int, target: Path, width: int, height: int,
+                     *, background: SlideBackground | None = None) -> None:
         presentation = slide = None
         try:
             presentation = self._open(path)
             slide = presentation.Slides.Item(index)
+            if background is not None:
+                # 읽기 전용 세션에서만 반영하며 원본 PPT에 저장하지 않는다.
+                set_slide_background(slide, background)
             slide.Export(str(target), "PNG", width, height)
             LOGGER.info("썸네일 내보내기 %s #%s %sx%s", path.name, index, width, height)
         except Exception as error:
@@ -216,6 +221,8 @@ class PresentationManager:
                         shape.Delete()
                     shape = None
                 inserted_slide.FollowMasterBackground = source.FollowMasterBackground
+                if item.background is not None:
+                    set_slide_background(inserted_slide, item.background)
                 LOGGER.info("슬라이드 삽입 %s #%s -> #%s", key, item.slide_index, number)
                 source = presentation = design = inserted_slide = None
                 progress("copying", number, key)

@@ -11,10 +11,13 @@ from zipfile import ZipFile
 
 from PIL import Image, ImageChops, ImageDraw
 
+from src.models.slide_model import SlideBackground, SlideItem
 from src.ppt.background_preservation import P, R, _slide_parts, _rels_part
 from src.ppt.powerpoint_service import PowerPointService
 from src.ppt.presentation_manager import PresentationManager
+from src.ppt.slide_background import import_background_image
 from src.ppt.source_validation import fingerprint, revision
+from src.ppt.thumbnail_service import ThumbnailService
 from src.utils.process_utils import process_pids
 from dataclasses import replace
 
@@ -39,6 +42,61 @@ def background_signature(path, index):
 
 @unittest.skipUnless(os.environ.get("PPT_MERGE_GENERATION_COM_TESTS") == "1", "Office 검증 활성화 필요")
 class BackgroundComTests(unittest.TestCase):
+    def test_output_background_overrides_and_previews_keep_the_source(self):
+        if process_pids("POWERPNT.EXE"):
+            self.skipTest("사용자 PowerPoint를 저장하고 닫은 뒤 실행하세요.")
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = Path(temporary)
+            source = folder / "source.pptx"
+            original_image = folder / "original.png"
+            Image.new("RGB", (320, 180), "#166981").save(original_image)
+            replacement_image = folder / "replacement.png"
+            Image.new("RGB", (320, 180), "#346854").save(replacement_image)
+            with PresentationManager() as manager:
+                deck = manager._app.Presentations.Add(False)
+                slide = None
+                try:
+                    deck.PageSetup.SlideWidth, deck.PageSetup.SlideHeight = 960, 540
+                    slide = deck.Slides.Add(1, 12)
+                    slide.FollowMasterBackground = False
+                    slide.Background.Fill.UserPicture(str(original_image))
+                    slide_id = int(slide.SlideID)
+                    deck.SaveAs(str(source), 24)
+                finally:
+                    slide = None
+                    deck.Saved = True
+                    deck.Close()
+                    deck = None
+            before = fingerprint(source)
+            item = SlideItem(str(source), source.name, 1, slide_id, source_revision=revision(before))
+            color = replace(item, background=SlideBackground(color="#D25A24"))
+            picture = replace(item, background=import_background_image(replacement_image, folder / "assets"))
+            replacement_image.rename(folder / "moved.png")
+            output = folder / "result.pptx"
+            service = PowerPointService(work_root=folder)
+            service.generate(service.prepare((item, color, picture), output))
+
+            expected = ((22, 105, 129), (210, 90, 36), (52, 104, 84))
+            with PresentationManager() as manager:
+                for index, pixel in enumerate(expected, 1):
+                    path = folder / f"out-{index}.png"
+                    manager.export_slide(output, index, path, 320, 180)
+                    with Image.open(path) as image:
+                        self.assertEqual(image.convert("RGB").getpixel((20, 20)), pixel)
+            self.assertEqual(background_signature(output, 1), background_signature(source, 1))
+
+            previews = ThumbnailService(folder / "cache", width=320)
+            (_, color_path), (_, picture_path) = previews.load_background_previews((color, picture))
+            self.assertNotEqual(color_path, picture_path)
+            for path, pixel in zip((color_path, picture_path), expected[1:]):
+                with Image.open(path) as image:
+                    self.assertEqual(image.convert("RGB").getpixel((20, 20)), pixel)
+            preview = ThumbnailService(folder / "cache", width=1600).load_preview(picture)
+            with Image.open(preview) as image:
+                self.assertEqual(image.convert("RGB").getpixel((20, 20)), expected[2])
+            self.assertEqual(fingerprint(source), before)
+        self.assertFalse(process_pids("POWERPNT.EXE"))
+
     def test_picture_transparency_texture_master_solid_gradient_and_duplicates(self):
         if process_pids("POWERPNT.EXE"):
             self.skipTest("사용자 PowerPoint를 저장하고 닫은 뒤 실행하세요.")

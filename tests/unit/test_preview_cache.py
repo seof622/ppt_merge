@@ -1,12 +1,13 @@
 """확대할 한 장의 캐시 재사용·손상 복구·실패 정리를 검증한다."""
+from dataclasses import replace
 import os
 from pathlib import Path
 import unittest
 from unittest.mock import patch
 from PIL import Image
-from src.models.slide_model import SlideItem
+from src.models.slide_model import SlideBackground, SlideItem
 from src.ppt.thumbnail_service import ThumbnailService
-from src.ppt.source_validation import fingerprint, revision
+from src.ppt.source_validation import fingerprint, revision, validate_source
 from src.ppt.errors import OperationCancelled, SourceChangedError, ThumbnailError
 import test_thumbnail_service as thumbnail_fixture
 
@@ -47,6 +48,22 @@ class PreviewCacheTests(unittest.TestCase):
             value.verify()
         self.assertEqual(self.recorder.exported, [2, 2])
         self.assertEqual(self.recorder.started, self.recorder.closed)
+
+    def test_background_cards_batch_distinct_edits_in_one_session(self):
+        original = self.slide()
+        slides = tuple(replace(original, background=SlideBackground(color=color))
+                       for color in ('#B22734', '#326454'))
+        with patch('src.ppt.thumbnail_service._validate_source', wraps=validate_source) as validate:
+            results = list(self.preview_service().load_background_previews(slides))
+        validate.assert_called_once()
+        self.assertEqual((self.recorder.started, self.recorder.closed), (1, 1))
+        self.assertEqual([slide for slide, _ in results], list(slides))
+        self.assertNotEqual(results[0][1], results[1][1])
+        for (_, path), pixel in zip(results, ((178, 39, 52), (50, 100, 84))):
+            with Image.open(path) as image:
+                self.assertEqual(image.getpixel((10, 10)), pixel)
+        self.assertEqual(list(self.preview_service().load_background_previews(slides)), results)
+        self.assertEqual(self.recorder.started, 1)
 
     def test_changed_source_is_rejected_before_opening_office(self):
         slide = self.slide()

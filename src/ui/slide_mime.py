@@ -26,7 +26,7 @@ def read_slide_mime(mime: QMimeData, token: str) -> dict | None:
         payload = json.loads(bytes(mime.data(SLIDE_MIME)).decode("utf-8"))
         if not isinstance(payload, dict) or payload.get("token") != token:
             return None
-        slides = tuple(SlideItem(**item) for item in payload["slides"])
+        slides = tuple(SlideItem.from_dict(item) for item in payload["slides"])
         if not slides or any(not isinstance(slide.slide_index, int) or slide.slide_index < 1
                              for slide in slides):
             return None
@@ -37,5 +37,5 @@ def read_slide_mime(mime: QMimeData, token: str) -> dict | None:
         if not isinstance(rows, list) or any(type(row) is not int or row < 0 for row in rows):
             return None
         return payload
-    except (ValueError, TypeError, KeyError, UnicodeDecodeError):
+    except (AttributeError, ValueError, TypeError, KeyError, UnicodeDecodeError):
         return None

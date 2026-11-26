@@ -1,16 +1,19 @@
 """출력 순서 편집 모델과 가로 썸네일 목록. COM 작업은 하지 않는다."""
 
 from collections.abc import Callable, Iterable
+from pathlib import Path
 from uuid import uuid4
 
 from PySide6.QtCore import QEasingCurve, QModelIndex, QPoint, QRect, QRectF, QSize, Qt, Signal, QItemSelectionModel, QVariantAnimation
 from PySide6.QtGui import QAction, QColor, QDrag, QFont, QKeySequence, QPainter, QPalette, QPen, QShortcut, QUndoCommand, QUndoStack
-from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel, QLayout, QListView, QMenu,
-                               QComboBox, QPushButton, QSlider, QSizePolicy, QStyle, QStyleOptionComboBox, QStyleOptionViewItem,
+from PySide6.QtWidgets import (QAbstractItemView, QColorDialog, QFileDialog, QHBoxLayout, QLabel, QLayout, QListView, QMenu,
+                               QComboBox, QMessageBox, QPushButton, QSlider, QSizePolicy, QStyle, QStyleOptionComboBox, QStyleOptionViewItem,
                                QToolButton, QVBoxLayout, QWidget)
 
 from src.models.project_model import OutputSequence
-from src.models.slide_model import SlideItem
+from src.models.slide_model import SlideBackground, SlideItem
+from src.ppt.errors import PowerPointError
+from src.ppt.slide_background import import_background_image
 from src.ui.slide_grid import SlideListModel
 from src.ui.slide_mime import make_slide_mime, read_slide_mime
 from src.ui.icons import icon, icon_button
@@ -39,6 +42,7 @@ class SequenceEdit(QUndoCommand):
 class OutputListModel(SlideListModel):
     edited = Signal(object)
     feedback = Signal(str)
+    background_preview_requested = Signal(object)
 
     def __init__(self, parent=None, drag_token: str = "") -> None:
         super().__init__(parent, drag_token)
@@ -49,16 +53,58 @@ class OutputListModel(SlideListModel):
         self.undo_stack = QUndoStack(self)
         self.undo_stack.setUndoLimit(100)
         self.selection_rows = lambda: []
+        self._background_images: dict[SlideItem, str] = {}
+        self._background_errors: dict[SlideItem, str] = {}
+
+    def background_thumbnail(self, slide: SlideItem) -> str | None:
+        return self._background_images.get(slide)
+
+    def needs_background_thumbnail(self, slide: SlideItem) -> bool:
+        return slide.background is not None and slide not in self._background_images and slide not in self._background_errors
+
+    def background_preview_text(self, slide: SlideItem) -> str:
+        if slide in self._background_images:
+            return "배경 변경"
+        if slide in self._background_errors:
+            return "배경 미리보기 실패"
+        return "배경 미리보기 준비 중"
+
+    def set_background_thumbnail(self, slide: SlideItem, path: str) -> None:
+        if slide.background is not None:
+            self._background_images[slide] = path
+            self._background_errors.pop(slide, None)
+            self._refresh_background_thumbnail(slide)
+
+    def fail_background_thumbnail(self, slide: SlideItem, message: str) -> None:
+        if slide not in self._background_images:
+            self._background_errors[slide] = message
+            self._refresh_background_thumbnail(slide)
+
+    def _refresh_background_thumbnail(self, slide: SlideItem) -> None:
+        for row, current in enumerate(self.slides):
+            if current == slide:
+                self._icons.pop(row, None)
+                index = self.index(row, 0)
+                self.dataChanged.emit(index, index, [Qt.ItemDataRole.DecorationRole, Qt.ItemDataRole.ToolTipRole])
+
+    def _thumbnail_path(self, slide: SlideItem) -> str | None:
+        return self.background_thumbnail(slide) or super()._thumbnail_path(slide)
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if index.isValid() and 0 <= index.row() < self.rowCount():
             slide = self.slides[index.row()]
+            if role == Qt.ItemDataRole.DecorationRole and self.needs_background_thumbnail(slide):
+                self.background_preview_requested.emit(slide)
             if role == Qt.ItemDataRole.DisplayRole:
                 if self.card_size.height() < 156:
                     return f"{index.row() + 1} · #{slide.slide_index} · {slide.source_file_name}"
                 return f"{index.row() + 1} · {slide.title or '슬라이드'}\n{slide.source_file_name} · 원본 {slide.slide_index}번"
             if role == Qt.ItemDataRole.ToolTipRole:
-                return f"출력 {index.row() + 1}번\n{slide.source_file}\n원본 슬라이드 {slide.slide_index}\n{slide.title or ''}"
+                text = f"출력 {index.row() + 1}번\n{slide.source_file}\n원본 슬라이드 {slide.slide_index}\n{slide.title or ''}"
+                if slide.background is not None:
+                    text += f"\n배경색 {slide.background.color}" if slide.background.color else "\n이미지 배경"
+                    text += f"\n{self._background_errors.get(slide, self.background_preview_text(slide))}"
+                return text
             if role == Qt.ItemDataRole.SizeHintRole:
                 return self.card_size
         return super().data(index, role)
@@ -403,8 +449,9 @@ class ViewModeComboBox(QComboBox):
 
 
 class OutputPanel(QWidget):
-    def __init__(self, parent=None, drag_token: str = "") -> None:
+    def __init__(self, parent=None, drag_token: str = "", *, background_directory: Path) -> None:
         super().__init__(parent)
+        self._background_directory = background_directory
         self.setObjectName("outputPanel")
         self._compact_controls = False
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -475,6 +522,21 @@ class OutputPanel(QWidget):
         selection_layout.setContentsMargins(0, 0, 0, 0)
         selection_layout.addLayout(tools)
         selection_layout.addStretch()
+        self.background_button = QPushButton("배경", self)
+        self.background_button.setObjectName("resultAction")
+        self.background_button.setToolTip("선택한 슬라이드 또는 전체 슬라이드의 배경 변경")
+        self.background_menu = QMenu("배경", self.background_button)
+        self._selected_background = self.background_menu.addMenu("선택한 슬라이드")
+        self._all_background = self.background_menu.addMenu("전체 슬라이드")
+        self._reset_background_actions = {}
+        for all_slides, menu in ((False, self._selected_background), (True, self._all_background)):
+            menu.addAction("단색…", lambda checked=False, scope=all_slides: self._choose_background_color(scope))
+            menu.addAction("이미지…", lambda checked=False, scope=all_slides: self._choose_background_image(scope))
+            menu.addSeparator()
+            self._reset_background_actions[all_slides] = menu.addAction(
+                "원래 배경", lambda checked=False, scope=all_slides: self._change_background(None, scope))
+        self.background_button.setMenu(self.background_menu)
+        selection_layout.addWidget(self.background_button)
         selection_layout.addWidget(self.clear_button)
         layout.addWidget(self.selection_toolbar)
         self.view = OutputListView(self)
@@ -594,6 +656,43 @@ class OutputPanel(QWidget):
         if rows:
             self.model.edit(lambda: self.model.sequence.duplicate(rows), f"{len(rows)}장 복제 — 같은 슬라이드를 한 번 더 담음")
 
+    def _background_rows(self, all_slides: bool) -> list[int]:
+        return list(range(self.model.rowCount())) if all_slides else self.selected_rows()
+
+    def _choose_background_color(self, all_slides: bool) -> None:
+        rows = self._background_rows(all_slides)
+        if not rows:
+            return
+        background = self.model.slides[rows[0]].background
+        initial = QColor(background.color if background and background.color else "#FFFFFF")
+        color = QColorDialog.getColor(initial, self, "배경색 선택")
+        if color.isValid():
+            self._change_background(SlideBackground(color=color.name()), all_slides)
+
+    def _choose_background_image(self, all_slides: bool) -> None:
+        if not self._background_rows(all_slides):
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "배경 이미지 선택", "", "이미지 (*.png *.jpg *.jpeg)")
+        if not path:
+            return
+        try:
+            background = import_background_image(Path(path), self._background_directory)
+        except PowerPointError as error:
+            QMessageBox.warning(self, "배경 이미지를 열 수 없습니다", str(error))
+            return
+        self._change_background(background, all_slides)
+
+    def _change_background(self, background: SlideBackground | None, all_slides: bool) -> None:
+        rows = self._background_rows(all_slides)
+        selected = self.selected_rows()
+
+        def apply() -> list[int]:
+            self.model.sequence.set_background(rows, background)
+            return selected
+
+        message = "배경 변경" if background is not None else "원래 배경으로 복원"
+        self.model.edit(apply, f"{len(rows)}장 {message}")
+
     def step_selected(self, direction: int) -> None:
         rows = self.selected_rows()
         if rows:
@@ -617,6 +716,10 @@ class OutputPanel(QWidget):
         for key in ("down", "last"):
             self.actions[key].setEnabled(bool(rows) and rows != list(range(count - len(rows), count)))
         self.clear_button.setEnabled(count > 0)
+        self._selected_background.setEnabled(bool(rows))
+        self._reset_background_actions[False].setEnabled(
+            any(self.model.slides[row].background is not None for row in rows))
+        self._reset_background_actions[True].setEnabled(any(slide.background is not None for slide in self.model.slides))
         if hasattr(self, 'preview_button'):
             self.preview_button.setEnabled(bool(rows))
 
@@ -630,5 +733,6 @@ class OutputPanel(QWidget):
         for action in self.actions.values():
             menu.addAction(action)
         menu.addSeparator()
+        menu.addMenu(self.background_menu)
         menu.addAction('확대 보기 · Space', lambda: open_preview(self.view))
         menu.exec(self.view.viewport().mapToGlobal(position))

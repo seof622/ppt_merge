@@ -85,6 +85,8 @@ def restore_slide_backgrounds(slides: tuple[SlideItem, ...], target: Path,
         backgrounds = []
         for number, item in enumerate(slides):
             check_cancel(cancel)
+            if item.background is not None:
+                continue
             key = str(Path(item.source_file).resolve())
             if key not in sources:
                 archive = stack.enter_context(ZipFile(key))
