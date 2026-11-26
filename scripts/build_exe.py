@@ -14,10 +14,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Windows 단일 EXE 빌드")
     parser.add_argument("--dist-dir", type=Path, default=ROOT / "dist",
                         help="EXE 출력 폴더 (기본: dist)")
+    parser.add_argument("--theme", choices=("slate-blue", "gruvbox-material"),
+                        default="slate-blue", help="EXE에 적용할 테마 (기본: slate-blue)")
     args = parser.parse_args()
     destination = args.dist_dir.resolve()
     # 외부 도구의 같은 이름 DLL(ICU 등)이 번들에 섞이지 않도록 제한한다.
     env = os.environ.copy()
+    env["PPT_MERGE_BUILD_THEME"] = args.theme
     windows = Path(env.get("SystemRoot", "C:/Windows"))
     env["PATH"] = os.pathsep.join([str(windows / "System32"), str(windows),
                                     str(Path(sys.base_prefix)), str(ROOT / ".venv/Scripts")])

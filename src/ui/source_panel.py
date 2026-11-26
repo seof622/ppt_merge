@@ -87,6 +87,7 @@ class SourcePanel(QFrame):
         self.tree = QTreeView()
         self.tree.setModel(self.tree_model)
         self.tree.setHeaderHidden(True)
+        self.tree.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         self.tree.setUniformRowHeights(True)
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tree.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -98,6 +99,7 @@ class SourcePanel(QFrame):
         self.stack.addWidget(self.tree)
         self.results = QListWidget()
         self.results.setObjectName("fileSearchResults")
+        self.results.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         self.results.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.stack.addWidget(self.results)
         self.search_status = QLabel()
@@ -121,13 +123,20 @@ class SourcePanel(QFrame):
         self.source_count.setObjectName("mutedText")
         originals_heading.addWidget(self.source_count)
         originals_layout.addLayout(originals_heading)
+        self.selected_name = QLabel()
+        self.selected_name.setObjectName('mutedText')
+        self.selected_name.setWordWrap(True)
+        self.selected_name.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.selected_name.hide()
+        originals_layout.addWidget(self.selected_name)
         self.list = QListWidget()
         self.list.setObjectName("sourceList")
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.list.setSpacing(4)
         self.list.setIconSize(QSize(18, 18))
         self.tree.setIconSize(QSize(18, 18))
-        self.list.setWordWrap(True)
+        self.list.setWordWrap(False)
+        self.list.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.tabs.addTab(self.originals_panel, '불러온 PPT')
         self.tabs.addTab(self.browser_page, '폴더 탐색')
@@ -267,7 +276,14 @@ class SourcePanel(QFrame):
         self.selection_changed.emit()
 
     def _current_changed(self, current, previous) -> None:
+        self._update_selected_name(current)
         self.current_source_changed.emit(current.data(Qt.ItemDataRole.UserRole) if current else "")
+
+    def _update_selected_name(self, item):
+        path = str(item.data(Qt.ItemDataRole.UserRole + 1) or item.data(Qt.ItemDataRole.UserRole)) if item else ''
+        self.selected_name.setText(Path(path).name if path else '')
+        self.selected_name.setToolTip(path)
+        self.selected_name.setVisible(bool(path))
 
     def _original_clicked(self, item) -> None:
         self._selection_origin = "originals"
@@ -277,6 +293,7 @@ class SourcePanel(QFrame):
     def add_source(self, key: str, path: str) -> None:
         item = QListWidgetItem(Path(path).name)
         item.setData(Qt.ItemDataRole.UserRole, key)
+        item.setData(Qt.ItemDataRole.UserRole + 1, path)
         self._items[key] = item
         self.list.addItem(item)
         self.set_state(key, path, "읽기 대기")
@@ -297,6 +314,7 @@ class SourcePanel(QFrame):
             return
         with QSignalBlocker(self.list):
             self.list.setCurrentItem(self._items[key], QItemSelectionModel.SelectionFlag.ClearAndSelect)
+        self._update_selected_name(self._items[key])
         self._selection_origin = "explorer" if from_browser else "originals"
         self.current_source_changed.emit(key)
         self.selection_changed.emit()

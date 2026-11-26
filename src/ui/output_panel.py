@@ -14,7 +14,9 @@ from src.models.slide_model import SlideItem
 from src.ui.slide_grid import SlideListModel
 from src.ui.slide_mime import make_slide_mime, read_slide_mime
 from src.ui.icons import icon, icon_button
-from src.ui.theme import ACCENT, MUTED
+from src.ui.theme import (ACCENT, MUTED, BADGE_TEXT, OUTPUT_SURFACE,
+                          DROP_SURFACE, DROP_BORDER, SURFACE, CARD_TITLE_SIZE, CARD_LABEL_SIZE,
+                          TEXT_WEIGHT, EMPHASIS_WEIGHT)
 from src.ui.slide_delegate import SlideCardDelegate, drag_image, slide_card_size
 from src.ui.slide_preview import open_preview
 
@@ -335,7 +337,7 @@ class OutputListView(QListView):
     def _paint_drop_preview(self):
         painter = QPainter(self.viewport())
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.fillRect(self.viewport().rect(), QColor('#EDF3FF'))
+        painter.fillRect(self.viewport().rect(), QColor(OUTPUT_SURFACE))
         for slot, row in enumerate(self._preview_order):
             if row is None:
                 continue
@@ -351,26 +353,26 @@ class OutputListView(QListView):
             self.itemDelegate().paint(painter, option, self.model().index(row, 0))
         slot = self._preview_order.index(None)
         rect = self._viewport_rect(QRectF(self._slot_rect(slot))).toRect().adjusted(4, 4, -4, -4)
-        painter.setBrush(QColor('#E0EAFF'))
-        painter.setPen(QPen(QColor('#A9C0EF'), 1.5))
+        painter.setBrush(QColor(DROP_SURFACE))
+        painter.setPen(QPen(QColor(DROP_BORDER), 1.5))
         painter.drawRoundedRect(rect, 9, 9)
         center = rect.center()
         circle = QRect(center.x() - 15, center.y() - 43, 30, 30)
-        painter.setBrush(QColor('#F5F8FF'))
+        painter.setBrush(QColor(SURFACE))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(circle)
         painter.setPen(QPen(QColor(ACCENT), 1.8))
         painter.drawLine(circle.center() + QPoint(-6, 0), circle.center() + QPoint(6, 0))
         painter.drawLine(circle.center() + QPoint(0, -6), circle.center() + QPoint(0, 6))
         font = QFont(self.font())
-        font.setPixelSize(13)
-        font.setWeight(QFont.Weight.Medium)
+        font.setPixelSize(CARD_TITLE_SIZE)
+        font.setWeight(QFont.Weight(EMPHASIS_WEIGHT))
         painter.setFont(font)
-        painter.setPen(QColor('#345CB0'))
+        painter.setPen(QColor(BADGE_TEXT))
         painter.drawText(QRect(rect.left() + 4, center.y() - 4, rect.width() - 8, 24),
                          Qt.AlignmentFlag.AlignCenter, '여기에 놓기')
-        font.setPixelSize(12)
-        font.setWeight(QFont.Weight.Normal)
+        font.setPixelSize(CARD_LABEL_SIZE)
+        font.setWeight(QFont.Weight(TEXT_WEIGHT))
         painter.setFont(font)
         painter.setPen(QColor(MUTED))
         label = f'{slot + 1}번째 · {self._preview_count}장 {"이동" if self._preview_moving else "추가"}'
@@ -404,6 +406,7 @@ class OutputPanel(QWidget):
     def __init__(self, parent=None, drag_token: str = "") -> None:
         super().__init__(parent)
         self.setObjectName("outputPanel")
+        self._compact_controls = False
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored)
         layout = QVBoxLayout(self)
@@ -419,7 +422,7 @@ class OutputPanel(QWidget):
         self.count.setObjectName("mutedText")
         self.header.addWidget(heading)
         self.header.addStretch(1)
-        count_row = QHBoxLayout()
+        count_row = self.count_row = QHBoxLayout()
         count_row.addWidget(self.count)
         count_row.addStretch()
         self.clear_button = icon_button("clear", "출력 비우기", self)
@@ -491,7 +494,9 @@ class OutputPanel(QWidget):
         self.view.setAccessibleName("출력 슬라이드 순서")
         self.view.setToolTip("왼쪽부터 최종 순서 · Ctrl·Shift 선택 · 드래그로 순서 변경\n"
                              "Delete 삭제 · Ctrl+D 복제 · Space 확대 · Ctrl+Z 실행 취소")
-        options = QHBoxLayout()
+        self.options_widget = QWidget()
+        options = QHBoxLayout(self.options_widget)
+        options.setContentsMargins(0, 0, 0, 0)
         self.preview_button = QPushButton('확대 보기')
         self.preview_button.setObjectName('quietButton')
         self.preview_button.clicked.connect(lambda: open_preview(self.view))
@@ -513,7 +518,7 @@ class OutputPanel(QWidget):
         self.zoom.setAccessibleName('결과 썸네일 크기')
         self.zoom.valueChanged.connect(self.view.set_thumbnail_width)
         options.addWidget(self.zoom)
-        layout.addLayout(options)
+        layout.addWidget(self.options_widget)
         shortcut = QShortcut(QKeySequence('Space'), self.view)
         shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         shortcut.activated.connect(lambda: open_preview(self.view))
@@ -526,6 +531,20 @@ class OutputPanel(QWidget):
         self.footer.setSpacing(8)
         self.footer.addStretch(1)
         self._update_actions()
+
+    def set_compact(self, compact):
+        if self._compact_controls == compact:
+            return
+        self._compact_controls = compact
+        self.layout().setContentsMargins(20, 12 if compact else 20, 20, 12 if compact else 16)
+        self.layout().setSpacing(8 if compact else 12)
+        if compact:
+            self.count_row.removeWidget(self.count)
+            self.header.insertWidget(1, self.count)
+        else:
+            self.header.removeWidget(self.count)
+            self.count_row.insertWidget(0, self.count)
+        self.view._resize_cards()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -588,6 +607,8 @@ class OutputPanel(QWidget):
     def _update_actions(self, *args) -> None:
         rows = self.selected_rows()
         count = self.model.rowCount()
+        self.selection_toolbar.setVisible(count > 0)
+        self.options_widget.setVisible(count > 0)
         self.count.setText(f"{count}장 · {len(rows)}장 선택")
         self.actions["remove"].setEnabled(bool(rows))
         self.actions["duplicate"].setEnabled(bool(rows))

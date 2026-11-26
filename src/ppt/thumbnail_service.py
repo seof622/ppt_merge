@@ -155,6 +155,71 @@ class ThumbnailService:
             LOGGER.exception("썸네일 파일 작업 실패 %s", path)
             raise ThumbnailError(file_error_message(error)) from error
 
+    def load_preview(self, slide: SlideItem, cancel: CancelCallback | None = None) -> str:
+        """확대할 한 장만 별도 해상도로 내보내고 검증된 캐시를 재사용한다."""
+        try:
+            return self._load_preview(slide, cancel)
+        except OSError as error:
+            LOGGER.exception("확대 미리보기 파일 작업 실패 %s", slide.source_file)
+            raise ThumbnailError(file_error_message(error)) from error
+
+    def _load_preview(self, slide: SlideItem, cancel: CancelCallback | None) -> str:
+        path = Path(slide.source_file).resolve()
+        _validate_source(path, cancel)
+        source = _fingerprint(path, cancel)
+        if slide.source_revision and slide.source_revision != revision(source):
+            raise SourceChangedError("원본 PPT가 변경되었습니다. 다시 읽은 뒤 확대해 주세요.")
+        identity = {"version": CACHE_VERSION, "source": source, "width": self.width,
+                    "slide_id": slide.slide_id, "slide_index": slide.slide_index}
+        key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
+        root = self.cache_root / "previews"
+        directory = root / key
+        if root.is_symlink() or directory.is_symlink():
+            raise ThumbnailError("확대 미리보기 캐시의 심볼릭 링크는 사용할 수 없습니다.")
+        target = directory / "slide.png"
+        try:
+            manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+            if (manifest["identity"] == identity and manifest.get("metadata_sha256") == _manifest_hash(manifest)
+                    and manifest["width"] == self.width and 0 < manifest["height"] <= 16384
+                    and _valid_image(target, self.width, manifest["height"], manifest["image_sha256"])):
+                check_cancel(cancel)
+                if _fingerprint(path, cancel) != source:
+                    raise SourceChangedError("미리보기 확인 중 원본 PPT가 변경되었습니다.")
+                return str(target)
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        root.mkdir(parents=True, exist_ok=True)
+        lock = root / f".{key}.lock"
+        try:
+            descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError as error:
+            raise ThumbnailError("이 슬라이드의 확대 미리보기를 이미 준비 중입니다.") from error
+        os.close(descriptor)
+        try:
+            with tempfile.TemporaryDirectory(prefix=".preview-", dir=root) as temporary:
+                staging = Path(temporary)
+                with self._backend_factory() as backend:
+                    info = backend.read_presentation(path, cancel)
+                    if not any(s.slide_index == slide.slide_index and s.slide_id == slide.slide_id for s in info.slides):
+                        raise SourceChangedError("원본 슬라이드가 변경되었습니다. PPT를 다시 읽어 주세요.")
+                    width, height = _dimensions(info, self.width)
+                    check_cancel(cancel)
+                    backend.export_slide(path, slide.slide_index, staging / "slide.png", width, height)
+                check_cancel(cancel)
+                if _fingerprint(path, cancel) != source:
+                    raise SourceChangedError("미리보기 생성 중 원본 PPT가 변경되었습니다.")
+                if not _valid_image(staging / "slide.png", width, height):
+                    raise ThumbnailError("확대 미리보기 이미지가 올바르지 않습니다.")
+                manifest = {"identity": identity, "width": width, "height": height,
+                            "image_sha256": _file_hash(staging / "slide.png")}
+                manifest["metadata_sha256"] = _manifest_hash(manifest)
+                (staging / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+                check_cancel(cancel)
+                self._publish(staging, directory, cancel)
+                return str(target)
+        finally:
+            lock.unlink(missing_ok=True)
+
     def _load(self, path: Path, progress: ProgressCallback | None,
               cancel: CancelCallback | None) -> ThumbnailResult:
         def report(stage: str, completed: int, total: int) -> None:

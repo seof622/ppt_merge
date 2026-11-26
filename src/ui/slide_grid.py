@@ -4,7 +4,7 @@ from collections import OrderedDict
 
 from PySide6.QtCore import QAbstractListModel, QModelIndex, QSize, Qt, Signal
 from PySide6.QtGui import QDrag, QIcon, QPixmap, QKeySequence, QShortcut
-from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel, QListView, QMenu,
+from PySide6.QtWidgets import (QAbstractItemView, QBoxLayout, QHBoxLayout, QLabel, QListView, QMenu,
                                QLineEdit, QPushButton, QSlider, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget)
 
 from src.models.presentation_model import PresentationInfo
@@ -18,9 +18,10 @@ from src.ui.slide_preview import open_preview
 class ElidedLabel(QLabel):
     """긴 파일명은 줄이고 전체 경로는 툴팁에서 확인한다."""
 
-    def __init__(self, text: str) -> None:
+    def __init__(self, text: str, elide_mode=Qt.TextElideMode.ElideRight) -> None:
         super().__init__()
         self._full_text = text
+        self.elide_mode = elide_mode
         self.setToolTip(text)
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self._refresh()
@@ -31,7 +32,7 @@ class ElidedLabel(QLabel):
         self._refresh()
 
     def _refresh(self) -> None:
-        super().setText(self.fontMetrics().elidedText(self._full_text, Qt.TextElideMode.ElideRight,
+        super().setText(self.fontMetrics().elidedText(self._full_text, self.elide_mode,
                                                      max(0, self.width())))
 
     def resizeEvent(self, event) -> None:
@@ -122,6 +123,7 @@ class SourceSlideView(QListView):
 
 class SlideGrid(QWidget):
     add_requested = Signal(object)
+    add_files_requested = Signal()
 
     def __init__(self, parent=None, drag_token: str = "") -> None:
         super().__init__(parent)
@@ -129,6 +131,7 @@ class SlideGrid(QWidget):
         self._all_slides = ()
         self._search_text = {}
         self._usage_counts = {}
+        self._compact_controls = False
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 16)
@@ -138,7 +141,7 @@ class SlideGrid(QWidget):
         layout.addWidget(title)
         header = QHBoxLayout()
         header.setSpacing(8)
-        self.heading = ElidedLabel("슬라이드")
+        self.heading = ElidedLabel("슬라이드", Qt.TextElideMode.ElideMiddle)
         self.heading.setObjectName("mutedText")
         self.count = QLabel("")
         self.count.setObjectName("mutedText")
@@ -157,7 +160,7 @@ class SlideGrid(QWidget):
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._filter_slides)
         layout.addWidget(self.search)
-        hint = QLabel('더블클릭으로 담기 · 결과 영역으로 드래그')
+        hint = self.hint = QLabel('더블클릭으로 담기 · 결과 영역으로 드래그')
         hint.setObjectName('mutedText')
         layout.addWidget(hint)
         self.stack = QStackedWidget()
@@ -165,7 +168,20 @@ class SlideGrid(QWidget):
         self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty.setWordWrap(True)
         self.empty.setObjectName("emptyState")
-        self.stack.addWidget(self.empty)
+        self.empty_page = QWidget()
+        empty_layout = QVBoxLayout(self.empty_page)
+        empty_layout.addStretch()
+        empty_layout.addWidget(self.empty)
+        self.empty_add_button = QPushButton('PPT 추가')
+        self.empty_add_button.setObjectName('primaryButton')
+        self.empty_add_button.clicked.connect(self.add_files_requested.emit)
+        empty_layout.addWidget(self.empty_add_button, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.drop_hint = QLabel('파일을 이 창으로 끌어 놓아도 됩니다')
+        self.drop_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.drop_hint.setObjectName('mutedText')
+        empty_layout.addWidget(self.drop_hint)
+        empty_layout.addStretch()
+        self.stack.addWidget(self.empty_page)
         self.view = SourceSlideView()
         self.view.setObjectName("slideView")
         self.view.setAccessibleName("원본 슬라이드")
@@ -194,14 +210,19 @@ class SlideGrid(QWidget):
         self.view.selectionModel().selectionChanged.connect(self._selection_changed)
         self.stack.addWidget(self.view)
         layout.addWidget(self.stack, 1)
-        controls = QHBoxLayout()
+        self.footer_controls = QWidget()
+        self.footer_layout = QBoxLayout(QBoxLayout.Direction.TopToBottom, self.footer_controls)
+        self.footer_layout.setContentsMargins(0, 0, 0, 0)
+        self.controls_widget = QWidget()
+        controls = QHBoxLayout(self.controls_widget)
+        controls.setContentsMargins(0, 0, 0, 0)
         self.preview_button = QPushButton('확대 보기')
         self.preview_button.setObjectName('quietButton')
         self.preview_button.setToolTip('선택한 슬라이드 크게 보기 · Space')
         self.preview_button.clicked.connect(lambda: open_preview(self.view))
         controls.addWidget(self.preview_button)
         controls.addStretch()
-        zoom_label = QLabel('크기')
+        zoom_label = self.zoom_label = QLabel('크기')
         zoom_label.setObjectName('mutedText')
         controls.addWidget(zoom_label)
         self.zoom = QSlider(Qt.Orientation.Horizontal)
@@ -211,14 +232,17 @@ class SlideGrid(QWidget):
         self.zoom.setAccessibleName('원본 썸네일 크기')
         self.zoom.valueChanged.connect(self._resize_cards)
         controls.addWidget(self.zoom)
-        layout.addLayout(controls)
-        actions = QHBoxLayout()
+        self.footer_layout.addWidget(self.controls_widget)
+        self.actions_widget = QWidget()
+        actions = QHBoxLayout(self.actions_widget)
+        actions.setContentsMargins(0, 0, 0, 0)
         self.all_button = QPushButton('전체 담기')
         self.all_button.clicked.connect(lambda: self.add_requested.emit(self.model.slides))
         actions.addWidget(self.all_button)
         actions.addWidget(self.add_button, 1)
         self.add_button.setObjectName('addSlidesButton')
-        layout.addLayout(actions)
+        self.footer_layout.addWidget(self.actions_widget, 1)
+        layout.addWidget(self.footer_controls)
         shortcut = QShortcut(QKeySequence('Space'), self.view)
         shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         shortcut.activated.connect(lambda: open_preview(self.view))
@@ -233,10 +257,32 @@ class SlideGrid(QWidget):
         self.count.setText("")
         self.add_button.setEnabled(False)
         self.empty.setText(message)
-        self.stack.setCurrentWidget(self.empty)
+        self.stack.setCurrentWidget(self.empty_page)
         self.all_button.setEnabled(False)
         self.preview_button.setEnabled(False)
         self.search.setEnabled(False)
+        self._show_tools(False)
+
+    def _show_tools(self, loaded):
+        self.search.setVisible(loaded)
+        self.hint.setVisible(loaded and not self._compact_controls)
+        self.footer_controls.setVisible(loaded)
+        self.empty_add_button.setVisible(not loaded)
+        self.drop_hint.setVisible(not loaded)
+
+    def set_compact(self, compact):
+        if compact == self._compact_controls:
+            return
+        self._compact_controls = compact
+        self.layout().setContentsMargins(20, 12 if compact else 20, 20, 12 if compact else 16)
+        self.layout().setSpacing(8 if compact else 12)
+        self.footer_layout.setDirection(QBoxLayout.Direction.LeftToRight if compact else QBoxLayout.Direction.TopToBottom)
+        self.zoom_label.setVisible(not compact)
+        self.zoom.setMaximumWidth(80 if compact else 110)
+        self.preview_button.setText('확대' if compact else '확대 보기')
+        self._show_tools(bool(self._all_slides))
+        self._selection_changed()
+        self._resize_cards()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -251,6 +297,9 @@ class SlideGrid(QWidget):
             width = min(width, max(80, int((available - 44) * 16 / 9)))
         # 좁은 패널에서도 카드의 좌우가 잘리지 않게 한다.
         width = min(width, max(100, self.view.viewport().width() - 2 * self.view.spacing() - 16))
+        if self._compact_controls and self.model.rowCount() >= 3 and self.view.viewport().width() >= 600:
+            # 낮은 창에서는 세 장을 한 줄에 보여 주어 한 장만 다음 줄에 잘리지 않게 한다.
+            width = min(width, (self.view.viewport().width() - 6 * 8 - 6) // 3 - 12)
         size = slide_card_size(width)
         if self.model.card_size != size:
             self.model.card_size = size
@@ -268,6 +317,7 @@ class SlideGrid(QWidget):
             self.search.clear()
             self.search.blockSignals(False)
         self.search.setEnabled(True)
+        self._show_tools(True)
         self._filter_slides()
         self.heading.setText(info.source_file_name)
         self.heading.setToolTip(info.source_file)
@@ -276,7 +326,7 @@ class SlideGrid(QWidget):
             self.stack.setCurrentWidget(self.view)
         elif not info.slide_count:
             self.empty.setText("이 PPT에는 슬라이드가 없습니다.")
-            self.stack.setCurrentWidget(self.empty)
+            self.stack.setCurrentWidget(self.empty_page)
 
     def _filter_slides(self, *args):
         query = self.search.text().strip().casefold()
@@ -290,7 +340,7 @@ class SlideGrid(QWidget):
                 self.view.selectionModel().select(self.model.index(row, 0), QItemSelectionModel.SelectionFlag.Select)
         self.all_button.setText(f'{"검색 결과" if query else "전체"} {len(slides)}장 담기')
         self.all_button.setEnabled(bool(slides))
-        self.stack.setCurrentWidget(self.view if slides else self.empty)
+        self.stack.setCurrentWidget(self.view if slides else self.empty_page)
         self.empty.setText('검색 결과가 없습니다.' if query else 'PPT를 추가하거나 파일을 끌어 놓으세요.')
         self._resize_cards()
         self._selection_changed()
@@ -307,7 +357,8 @@ class SlideGrid(QWidget):
         selected = len(self.view.selectionModel().selectedIndexes())
         self.count.setText(f"{self.model.rowCount()}장 · {selected}장 선택")
         self.add_button.setEnabled(selected > 0)
-        self.add_button.setText(f'선택한 {selected}장 담기 →' if selected else '선택해서 담기 →')
+        self.add_button.setText((f'{selected}장 담기 →' if self._compact_controls else f'선택한 {selected}장 담기 →')
+                               if selected else '선택해서 담기 →')
         self.preview_button.setEnabled(selected > 0)
 
     def add_selected(self) -> None:

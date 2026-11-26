@@ -20,6 +20,7 @@ from src.ui.source_panel import SourcePanel
 from src.ui.icons import icon
 from src.ui.theme import SURFACE
 from src.ui.output_panel import OutputPanel
+from src.ui.slide_delegate import slide_card_size
 from src.utils.path_preferences import PathPreferences
 from src.utils.workspace_store import WorkspaceStore
 from src.workers.ppt_worker import PptWorker, GenerationWorker
@@ -61,6 +62,9 @@ class MainWindow(QMainWindow):
         self._allow_mixed_sizes: bool | None = None
         self.last_generation_result: GenerationResult | None = None
         self._last_saved_result: GenerationResult | None = None
+        self._saved_sequence = None
+        self._preview_dialogs = set()
+        self._preview_factory = (lambda: ThumbnailService(cache_root, width=1600)) if service_factory is None else None
         self._browser_root: Path | None = None
         self._path_preferences = PathPreferences(cache_root.parent / "settings.ini")
 
@@ -125,7 +129,7 @@ class MainWindow(QMainWindow):
         if self._path_preferences.root_path:
             self.source_panel.set_root(self._path_preferences.root_path)
         self.source_panel.setMinimumWidth(250)
-        self.source_panel.setMaximumWidth(360)
+        self.source_panel.setMaximumWidth(480)
         self.originals_panel = self.source_panel.originals_panel
         self.root_label = ElidedLabel('')
         self.root_label.setObjectName('rootPath')
@@ -151,6 +155,7 @@ class MainWindow(QMainWindow):
 
         drag_token = uuid4().hex
         self.slide_grid = SlideGrid(drag_token=drag_token)
+        self.slide_grid.add_files_requested.connect(self.choose_presentations)
         self.output_panel = OutputPanel(drag_token=drag_token)
         self.slide_grid.add_requested.connect(self.output_panel.add_slides)
         stack = self.output_panel.model.undo_stack
@@ -207,6 +212,9 @@ class MainWindow(QMainWindow):
             mode_switch_layout.addWidget(button)
         mode_bar.addWidget(self.mode_switch)
         mode_bar.addStretch()
+        self.output_save_state = QLabel('PPT 생성 전')
+        self.output_save_state.setObjectName('mutedText')
+        mode_bar.addWidget(self.output_save_state)
         workspace_layout.addLayout(mode_bar)
         self.composer = QSplitter(Qt.Orientation.Horizontal)
         self.composer.setHandleWidth(1)
@@ -226,6 +234,9 @@ class MainWindow(QMainWindow):
         splitter.setCollapsible(1, False)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
+        splitter.splitterMoved.connect(lambda *_: self._apply_workspace_layout())
+        self.slide_grid.zoom.valueChanged.connect(lambda *_: self._apply_workspace_layout())
+        self.output_panel.zoom.valueChanged.connect(lambda *_: self._apply_workspace_layout())
         layout.addWidget(splitter, 1)
 
         self.output_toggle_action = QAction('결과 크게 보기', self)
@@ -255,9 +266,14 @@ class MainWindow(QMainWindow):
 
         status = self.statusBar()
         status.setSizeGripEnabled(True)
+        status.setMinimumHeight(36)
+        self.status_container = QWidget()
+        status_layout = QHBoxLayout(self.status_container)
+        status_layout.setContentsMargins(20, 6, 12, 8)
         self.status_text = ElidedLabel('PPT를 추가하거나 파일을 끌어 놓으세요')
         self.status_text.setObjectName('statusText')
-        status.addWidget(self.status_text, 1)
+        status_layout.addWidget(self.status_text, 1)
+        status.addWidget(self.status_container, 1)
         self.progress_bar = QProgressBar()
         self.progress_bar.setFixedWidth(200)
         self.progress_bar.hide()
@@ -280,11 +296,13 @@ class MainWindow(QMainWindow):
     def showEvent(self, event):
         super().showEvent(event)
         self._apply_workspace_layout()
+        QTimer.singleShot(0, self._apply_workspace_layout)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, 'mode_buttons'):
             self._apply_workspace_layout()
+            QTimer.singleShot(0, self._apply_workspace_layout)
 
     def set_workspace_mode(self, mode):
         self._view_mode = mode
@@ -293,7 +311,13 @@ class MainWindow(QMainWindow):
         self._apply_workspace_layout()
 
     def _apply_workspace_layout(self):
-        compact = self.width() < 1320
+        if not hasattr(self, 'composer'):
+            return
+        source_width = 2 * slide_card_size(self.slide_grid.zoom.value()).width() + 72
+        result_width = 2 * slide_card_size(self.output_panel.zoom.value(), True).width() + 72
+        available = self.width() - self.source_panel.width() - 25
+        compact = available < source_width + result_width + self.composer.handleWidth()
+        entering_wide = self._compact and not compact
         if compact != self._compact:
             if compact:
                 self._wide_mode = self._view_mode
@@ -305,6 +329,10 @@ class MainWindow(QMainWindow):
         self.mode_buttons[self._view_mode].setChecked(True)
         self.slide_grid.setVisible(self._view_mode != 'result')
         self.output_panel.setVisible(self._view_mode != 'source')
+        self.slide_grid.set_compact(self.height() < 800)
+        self.output_panel.set_compact(self.height() < 800)
+        if entering_wide:
+            self.composer.setSizes([source_width, result_width])
         self.output_toggle_action.setText('나란히 보기' if self._view_mode == 'result' and not compact else '원본 보기' if self._view_mode == 'result' else '결과 크게 보기')
 
     def _toggle_output_panel(self):
@@ -317,6 +345,16 @@ class MainWindow(QMainWindow):
         self._schedule_workspace_save()
         self._update_actions()
 
+    def _update_save_state(self):
+        generated = self._last_saved_result is not None
+        dirty = generated and tuple(self.output_panel.output_slides) != self._saved_sequence
+        self.generate_button.setText('PPT 다시 생성' if dirty else 'PPT로 저장')
+        self.open_file_button.setText('이전 생성본 열기' if dirty else '생성한 PPT 열기')
+        self.output_save_state.setText('PPT 변경 사항 있음' if dirty else 'PPT 생성 완료' if generated else 'PPT 생성 전')
+        self.output_save_state.setToolTip(
+            '작업 목록은 자동 저장되지만 PPT 파일에는 다시 생성해야 반영됩니다.' if dirty
+            else self._last_saved_result.output_path if generated else '슬라이드를 담은 뒤 PPT로 저장하세요.')
+
     def _schedule_workspace_save(self):
         if not self._restoring:
             self._restore_incomplete = False
@@ -327,7 +365,7 @@ class MainWindow(QMainWindow):
             return
         saved = self._workspace_store.save((s.path for s in self._sources.values()),
                                             self.output_panel.output_slides)
-        self.workspace_status.setText('작업 자동 저장됨' if saved else '작업 목록을 저장하지 못했습니다')
+        self.workspace_status.setText('작업 목록 저장됨' if saved else '작업 목록을 저장하지 못했습니다')
 
     def _restore_workspace(self):
         if self._closing or self._sources or self.output_panel.output_slides:
@@ -384,7 +422,7 @@ class MainWindow(QMainWindow):
 
     @property
     def is_busy(self) -> bool:
-        return self.is_loading or self.is_generating
+        return self.is_loading or self.is_generating or any(d.is_loading for d in self._preview_dialogs)
 
     @Slot(str)
     def _on_output_feedback(self, message: str) -> None:
@@ -486,12 +524,12 @@ class MainWindow(QMainWindow):
     def _on_generated(self, result: GenerationResult) -> None:
         self.last_generation_result = result
         self._last_saved_result = result
+        self._saved_sequence = tuple(self.output_panel.output_slides)
         self._path_preferences.remember_output(result.output_path)
         self.open_file_button.setToolTip(f"{result.output_path}\n다시 생성하려면 PowerPoint를 닫아 주세요.")
         self.open_output_button.setToolTip(f"{Path(result.output_path).name}\n{Path(result.output_path).parent}")
         self._generation_outcome = f"저장 완료 · {result.slide_count}장 · {result.output_path}"
-        self.workspace_status.setText(f'저장 완료 · {Path(result.output_path).name}')
-        self.workspace_status.setToolTip(result.output_path)
+        self._update_save_state()
 
     @Slot(object)
     def _on_generation_progress(self, event: GenerationProgress) -> None:
@@ -780,6 +818,7 @@ class MainWindow(QMainWindow):
         self._update_actions()
 
     def _update_actions(self) -> None:
+        self._update_save_state()
         selected = bool(self.source_panel.selected_keys())
         available = not self.is_busy and not self._closing and not self._restoring
         saved_output_exists = (self._last_saved_result is not None
@@ -855,6 +894,8 @@ class MainWindow(QMainWindow):
         self._save_timer.stop()
         self._save_workspace()
         self.source_panel.shutdown_search()
+        for dialog in tuple(self._preview_dialogs):
+            dialog.close()
         if self.is_busy or self.source_panel.has_search:
             self._closing = True
             self.cancel_loading()

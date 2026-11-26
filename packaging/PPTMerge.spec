@@ -1,16 +1,20 @@
 # PyInstaller 단일 EXE: Qt·Python·COM 런타임만 포함한다.
 from pathlib import Path
+import os
 
 root = Path(SPECPATH).parent
+theme = os.environ.get("PPT_MERGE_BUILD_THEME", "slate-blue")
+runtime_hooks = ([str(root / "packaging/gruvbox_material_hook.py")]
+                 if theme == "gruvbox-material" else [])
 analysis = Analysis(
     [str(root / "packaging" / "entrypoint.py")],
     pathex=[str(root)],
     binaries=[],
-    datas=[],
+    datas=[(str(root / "assets/fonts"), "assets/fonts")] if theme == "gruvbox-material" else [],
     hiddenimports=["pythoncom", "pywintypes", "win32com.client", "win32timezone"],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=runtime_hooks,
     excludes=["tkinter", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets"],
     noarchive=False,
 )

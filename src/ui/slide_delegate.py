@@ -4,7 +4,10 @@ from pathlib import Path
 from PySide6.QtCore import QRect, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QStyledItemDelegate, QStyle
-from src.ui.theme import ACCENT, BORDER, MUTED, TEXT, BADGE_SURFACE, BADGE_TEXT
+from src.ui.theme import (ACCENT, BORDER, MUTED, TEXT, BADGE_SURFACE, BADGE_TEXT,
+                          CARD_SURFACE, HOVER_BORDER, ON_ACCENT, CARD_TITLE_SIZE,
+                          CARD_DETAIL_SIZE, CARD_LABEL_SIZE, CARD_BADGE_SIZE,
+                          TEXT_WEIGHT, EMPHASIS_WEIGHT)
 
 
 def slide_card_size(width: int, output: bool = False) -> QSize:
@@ -22,7 +25,7 @@ def drag_image(model, index, count):
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(QColor(ACCENT))
     painter.drawRoundedRect(QRect(24, 90, 132, 28), 6, 6)
-    painter.setPen(QColor('white'))
+    painter.setPen(QColor(ON_ACCENT))
     painter.drawText(QRect(24, 90, 132, 28), Qt.AlignmentFlag.AlignCenter, f'{count}장 이동')
     painter.end()
     return pixmap
@@ -45,7 +48,7 @@ class SlideCardDelegate(QStyledItemDelegate):
         image_width = rect.width() - 8
         image_rect = QRect(rect.left() + 4, rect.top() + 4, image_width, round(image_width * 9 / 16))
         frame = image_rect.adjusted(-2, -2, 2, 2)
-        painter.setBrush(QColor('#F1F6FD'))
+        painter.setBrush(QColor(CARD_SURFACE))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(frame, 5, 5)
         image = model.data(index, Qt.ItemDataRole.DecorationRole)
@@ -60,12 +63,12 @@ class SlideCardDelegate(QStyledItemDelegate):
             painter.drawText(image_rect, Qt.AlignmentFlag.AlignCenter, '미리보기 없음')
         # 원본 이미지는 착색하거나 자르지 않고 바깥 테두리로 선택을 표시한다.
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(QColor(ACCENT if selected or focused else '#A7C2EC' if hover else BORDER),
+        painter.setPen(QPen(QColor(ACCENT if selected or focused else HOVER_BORDER if hover else BORDER),
                             2 if selected or focused else 1))
         painter.drawRoundedRect(frame, 5, 5)
         font = QFont(option.font)
-        font.setPixelSize(12)
-        font.setWeight(QFont.Weight.Normal)
+        font.setPixelSize(CARD_LABEL_SIZE)
+        font.setWeight(QFont.Weight(TEXT_WEIGHT))
         painter.setFont(font)
         number = index.row() + 1 if self.output else slide.slide_index
         number_width = max(26, painter.fontMetrics().horizontalAdvance(str(number)) + 10)
@@ -73,8 +76,8 @@ class SlideCardDelegate(QStyledItemDelegate):
         painter.setPen(QColor(ACCENT if selected else MUTED))
         painter.drawText(QRect(caption.left(), caption.top(), number_width, caption.height()),
                          Qt.AlignmentFlag.AlignVCenter, f'{number:02d}')
-        font.setPixelSize(13)
-        font.setWeight(QFont.Weight.Medium)
+        font.setPixelSize(CARD_TITLE_SIZE)
+        font.setWeight(QFont.Weight(EMPHASIS_WEIGHT))
         painter.setFont(font)
         painter.setPen(QColor(TEXT))
         title_rect = caption.adjusted(number_width, 0, 0, 0)
@@ -82,8 +85,8 @@ class SlideCardDelegate(QStyledItemDelegate):
                          painter.fontMetrics().elidedText(slide.title or '슬라이드',
                                                          Qt.TextElideMode.ElideRight, title_rect.width()))
         if self.output:
-            font.setPixelSize(11)
-            font.setWeight(QFont.Weight.Normal)
+            font.setPixelSize(CARD_DETAIL_SIZE)
+            font.setWeight(QFont.Weight(TEXT_WEIGHT))
             painter.setFont(font)
             painter.setPen(QColor(MUTED))
             detail = f'{Path(slide.source_file_name).stem} · 원본 {slide.slide_index}'
@@ -94,8 +97,8 @@ class SlideCardDelegate(QStyledItemDelegate):
         else:
             count = getattr(model, 'usage_counts', {}).get((slide.source_file, slide.slide_id), 0)
             if count:
-                font.setPixelSize(11)
-                font.setWeight(QFont.Weight.Medium)
+                font.setPixelSize(CARD_BADGE_SIZE)
+                font.setWeight(QFont.Weight(EMPHASIS_WEIGHT))
                 painter.setFont(font)
                 label = f'담김 {count}'
                 badge_width = painter.fontMetrics().horizontalAdvance(label) + 16
@@ -108,9 +111,9 @@ class SlideCardDelegate(QStyledItemDelegate):
         if selected:
             badge = QRect(image_rect.right() - 24, image_rect.top() + 6, 18, 18)
             painter.setBrush(QColor(ACCENT))
-            painter.setPen(QPen(QColor('white'), 1.5))
+            painter.setPen(QPen(QColor(ON_ACCENT), 1.5))
             painter.drawEllipse(badge)
-            painter.setPen(QPen(QColor('white'), 1.8))
+            painter.setPen(QPen(QColor(ON_ACCENT), 1.8))
             painter.drawLine(badge.left()+4, badge.top()+9, badge.left()+7, badge.top()+12)
             painter.drawLine(badge.left()+7, badge.top()+12, badge.left()+14, badge.top()+5)
         painter.restore()

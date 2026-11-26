@@ -10,7 +10,8 @@ from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import QApplication
 
 from src.ui.main_window import MainWindow
-from src.ui.theme import APP_STYLESHEET, application_palette
+from src.ui.theme import (ACTIVE_THEME, APP_STYLESHEET, BASE_FONT_SIZE, FONT_FAMILIES,
+                          TEXT_WEIGHT, application_palette)
 from src.utils.logger import configure_logging
 from src.utils.app_paths import app_data_root
 from src.utils.qt_lifecycle import shutdown_application
@@ -22,6 +23,14 @@ def configure_application(app: QApplication) -> None:
     app.setApplicationName("PPT Merge")
     app.setStyle("Fusion")
     app.setPalette(application_palette())
+    # 앱에 포함된 글꼴은 시스템 설치 없이 등록하며, EXE에서는 번들 안에서 읽는다.
+    if ACTIVE_THEME == "gruvbox-material" and not app.property("pptmergeBundledFontsLoaded"):
+        font_root = Path(__file__).resolve().parents[1] / "assets/fonts"
+        for name in ("PretendardGOV-Medium.otf", "PretendardGOV-SemiBold.otf", "PretendardGOV-Bold.otf"):
+            font_path = font_root / name
+            if QFontDatabase.addApplicationFont(str(font_path)) < 0:
+                logging.getLogger("ppt_merge.fonts").warning("앱 글꼴 등록 실패: %s", font_path)
+        app.setProperty("pptmergeBundledFontsLoaded", True)
     # 화면 없는 검증에 필요한 글꼴은 QApplication마다 한 번만 등록한다.
     # 실제 Windows 화면에서는 시스템 글꼴을 그대로 사용한다.
     if app.platformName() == "offscreen" and not app.property("pptmergeFontsLoaded"):
@@ -31,8 +40,9 @@ def configure_application(app: QApplication) -> None:
                 QFontDatabase.addApplicationFont(str(font_path))
         app.setProperty("pptmergeFontsLoaded", True)
     font = QFont()
-    font.setFamilies(["Segoe UI", "맑은 고딕"])
-    font.setPixelSize(13)
+    font.setFamilies(FONT_FAMILIES)
+    font.setPixelSize(BASE_FONT_SIZE)
+    font.setWeight(QFont.Weight(TEXT_WEIGHT))
     app.setFont(font)
     app.setStyleSheet(APP_STYLESHEET)
 

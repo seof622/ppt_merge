@@ -69,6 +69,36 @@ class PptWorker(QObject):
             self.finished.emit()
 
 
+class PreviewWorker(QObject):
+    loaded = Signal(object, str)
+    failed = Signal(object, str)
+    finished = Signal()
+
+    def __init__(self, slide, service_factory):
+        super().__init__()
+        self.slide = slide
+        self.service_factory = service_factory
+        self._cancel = threading.Event()
+
+    def request_cancel(self):
+        self._cancel.set()
+
+    @Slot()
+    def run(self):
+        try:
+            path = self.service_factory().load_preview(self.slide, cancel=self._cancel.is_set)
+            self.loaded.emit(self.slide, path)
+        except OperationCancelled:
+            pass
+        except PowerPointError as error:
+            self.failed.emit(self.slide, str(error))
+        except Exception:
+            LOGGER.exception("확대 미리보기 준비 실패")
+            self.failed.emit(self.slide, "확대 미리보기를 준비하지 못했습니다. 로그를 확인하세요.")
+        finally:
+            self.finished.emit()
+
+
 class GenerationWorker(QObject):
     """생성 준비와 실행을 각각 QThread에서 처리한다."""
 
