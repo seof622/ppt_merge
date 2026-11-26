@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication
 from src.ui.main_window import MainWindow
 from src.ui.theme import (ACTIVE_THEME, APP_STYLESHEET, BASE_FONT_SIZE, FONT_FAMILIES,
                           TEXT_WEIGHT, application_palette)
+from src.ui.window_frame import install_window_frame_theme
 from src.utils.logger import configure_logging
 from src.utils.app_paths import app_data_root
 from src.utils.qt_lifecycle import shutdown_application
@@ -56,19 +57,22 @@ def main() -> int:
     configure_logging(ROOT / "logs")
     app = QApplication(sys.argv[:1])
     configure_application(app)
-    window = MainWindow(ROOT / "cache")
-    window.show()
-    if args.package_check:
-        from src.utils.package_check import start_package_check
-        start_package_check(app, window, args.package_check, args.sources, ROOT,
-                            all_slides=args.package_check_all_slides)
-    elif args.sources:
-        QTimer.singleShot(0, lambda: window.add_sources(args.sources))
+    window_frame = install_window_frame_theme(app)
     logger = logging.getLogger("ppt_merge.app")
-    logger.info("앱 시작 frozen=%s 데이터=%s 실행파일=%s", getattr(sys, "frozen", False), ROOT, sys.executable)
     try:
+        window = MainWindow(ROOT / "cache")
+        window.show()
+        if args.package_check:
+            from src.utils.package_check import start_package_check
+            start_package_check(app, window, args.package_check, args.sources, ROOT,
+                                all_slides=args.package_check_all_slides)
+        elif args.sources:
+            QTimer.singleShot(0, lambda: window.add_sources(args.sources))
+        logger.info("앱 시작 frozen=%s 데이터=%s 실행파일=%s", getattr(sys, "frozen", False), ROOT, sys.executable)
         return app.exec()
     finally:
+        if window_frame is not None:
+            window_frame.close()
         logger.info("앱 종료")
         # Python GC에 남겨 두면 QWidget·폰트가 QApplication보다 늦게 해제될 수 있다.
         shutdown_application(app)
