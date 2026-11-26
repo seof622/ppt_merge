@@ -1,6 +1,8 @@
 """확대할 한 장의 캐시 재사용·손상 복구·실패 정리를 검증한다."""
+import os
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 from PIL import Image
 from src.models.slide_model import SlideItem
 from src.ppt.thumbnail_service import ThumbnailService
@@ -27,7 +29,13 @@ class PreviewCacheTests(unittest.TestCase):
         with Image.open(image) as value:
             self.assertEqual(value.size, (1600, 900))
         self.assertEqual(self.recorder.exported, [2])
-        self.assertEqual(self.preview_service().load_preview(slide), str(image))
+        self.assertEqual(self.recorder.presentation_reads, 0)
+        self.assertEqual(self.recorder.slide_size_reads, [(2, 257)])
+        with (patch('src.ppt.thumbnail_service._validate_source') as validate,
+              patch('src.ppt.thumbnail_service._fingerprint', wraps=fingerprint) as read_hash):
+            self.assertEqual(self.preview_service().load_preview(slide), str(image))
+        validate.assert_not_called()
+        read_hash.assert_called_once_with(self.source, None)
         self.assertEqual((self.recorder.started, self.recorder.closed), (1, 1))
 
     def test_corrupt_high_resolution_cache_is_repaired(self):
@@ -46,6 +54,17 @@ class PreviewCacheTests(unittest.TestCase):
         with self.assertRaises(SourceChangedError):
             self.preview_service().load_preview(slide)
         self.assertEqual(self.recorder.started, 0)
+
+    def test_cached_preview_rejects_content_change_with_same_size_and_mtime(self):
+        slide = self.slide()
+        self.preview_service().load_preview(slide)
+        original = self.source.stat()
+        self.write_source('BBB')
+        os.utime(self.source, ns=(original.st_atime_ns, original.st_mtime_ns))
+        self.assertEqual(self.source.stat().st_size, original.st_size)
+        with self.assertRaises(SourceChangedError):
+            self.preview_service().load_preview(slide)
+        self.assertEqual(self.recorder.started, 1)
 
     def test_failure_preserves_other_cache_and_removes_temporary_files(self):
         good = Path(self.preview_service().load_preview(self.slide(1)))

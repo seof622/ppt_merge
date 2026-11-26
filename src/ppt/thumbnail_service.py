@@ -21,7 +21,7 @@ from src.models.presentation_model import PresentationInfo
 from src.models.slide_model import SlideItem
 from src.ppt.errors import (CancelCallback, OperationCancelled, PresentationOpenError,
                             SourceChangedError, ThumbnailError, check_cancel, file_error_message)
-from src.ppt.source_validation import (file_hash as _file_hash, fingerprint as _fingerprint,
+from src.ppt.source_validation import (check_source_file, file_hash as _file_hash, fingerprint as _fingerprint,
                                        validate_source as _validate_source, revision)
 from src.ppt.presentation_manager import PresentationManager
 
@@ -33,6 +33,7 @@ class ThumbnailBackend(Protocol):
     def __enter__(self) -> ThumbnailBackend: ...
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None: ...
     def read_presentation(self, path: Path, cancel: CancelCallback | None = None) -> PresentationInfo: ...
+    def read_slide_size(self, path: Path, index: int, slide_id: int) -> tuple[float, float]: ...
     def export_slide(self, path: Path, index: int, target: Path, width: int, height: int) -> None: ...
 
 
@@ -56,11 +57,19 @@ class ThumbnailResult:
 ProgressCallback = Callable[[ThumbnailProgress], None]
 
 
-def _dimensions(info: PresentationInfo, width: int) -> tuple[int, int]:
-    if not (math.isfinite(info.width_points) and math.isfinite(info.height_points)
-            and info.width_points > 0 and info.height_points > 0):
+def _dimensions(width_points: float, height_points: float, width: int) -> tuple[int, int]:
+    if not (math.isfinite(width_points) and math.isfinite(height_points)
+            and width_points > 0 and height_points > 0):
         raise ThumbnailError("슬라이드 크기를 읽지 못했습니다.")
-    return width, max(1, round(width * info.height_points / info.width_points))
+    return width, max(1, round(width * height_points / width_points))
+
+
+def _check_preview_source(path: Path, before: os.stat_result) -> None:
+    after = path.stat()
+    if (not os.path.samestat(before, after)
+            or (before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+            != (after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
+        raise SourceChangedError("미리보기 준비 중 원본 PPT가 변경되었습니다. 다시 시도하세요.")
 
 
 def _valid_image(path: Path, width: int, height: int, digest: str | None = None) -> bool:
@@ -132,7 +141,7 @@ class ThumbnailService:
                                        revision(identity["source"])))
             info = PresentationInfo(str(path), path.name, float(manifest["width_points"]),
                                     float(manifest["height_points"]), tuple(items))
-            width, height = _dimensions(info, self.width)
+            width, height = _dimensions(info.width_points, info.height_points, self.width)
             valid = set()
             for index, record in enumerate(records, 1):
                 check_cancel(cancel)
@@ -165,7 +174,7 @@ class ThumbnailService:
 
     def _load_preview(self, slide: SlideItem, cancel: CancelCallback | None) -> str:
         path = Path(slide.source_file).resolve()
-        _validate_source(path, cancel)
+        source_stat = check_source_file(path, cancel)
         source = _fingerprint(path, cancel)
         if slide.source_revision and slide.source_revision != revision(source):
             raise SourceChangedError("원본 PPT가 변경되었습니다. 다시 읽은 뒤 확대해 주세요.")
@@ -179,15 +188,15 @@ class ThumbnailService:
         target = directory / "slide.png"
         try:
             manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
-            if (manifest["identity"] == identity and manifest.get("metadata_sha256") == _manifest_hash(manifest)
-                    and manifest["width"] == self.width and 0 < manifest["height"] <= 16384
-                    and _valid_image(target, self.width, manifest["height"], manifest["image_sha256"])):
-                check_cancel(cancel)
-                if _fingerprint(path, cancel) != source:
-                    raise SourceChangedError("미리보기 확인 중 원본 PPT가 변경되었습니다.")
-                return str(target)
+            cached = (manifest["identity"] == identity and manifest.get("metadata_sha256") == _manifest_hash(manifest)
+                      and manifest["width"] == self.width and 0 < manifest["height"] <= 16384
+                      and _valid_image(target, self.width, manifest["height"], manifest["image_sha256"]))
         except (OSError, ValueError, KeyError, TypeError):
-            pass
+            cached = False
+        if cached:
+            check_cancel(cancel)
+            _check_preview_source(path, source_stat)
+            return str(target)
         root.mkdir(parents=True, exist_ok=True)
         lock = root / f".{key}.lock"
         try:
@@ -196,13 +205,14 @@ class ThumbnailService:
             raise ThumbnailError("이 슬라이드의 확대 미리보기를 이미 준비 중입니다.") from error
         os.close(descriptor)
         try:
+            _validate_source(path, cancel)
+            _check_preview_source(path, source_stat)
             with tempfile.TemporaryDirectory(prefix=".preview-", dir=root) as temporary:
                 staging = Path(temporary)
                 with self._backend_factory() as backend:
-                    info = backend.read_presentation(path, cancel)
-                    if not any(s.slide_index == slide.slide_index and s.slide_id == slide.slide_id for s in info.slides):
-                        raise SourceChangedError("원본 슬라이드가 변경되었습니다. PPT를 다시 읽어 주세요.")
-                    width, height = _dimensions(info, self.width)
+                    check_cancel(cancel)
+                    width_points, height_points = backend.read_slide_size(path, slide.slide_index, slide.slide_id)
+                    width, height = _dimensions(width_points, height_points, self.width)
                     check_cancel(cancel)
                     backend.export_slide(path, slide.slide_index, staging / "slide.png", width, height)
                 check_cancel(cancel)
@@ -258,7 +268,7 @@ class ThumbnailService:
                     if cached is None or replace(cached, slides=tuple(replace(s, thumbnail_path=None, source_revision=None)
                                                                         for s in cached.slides)) != info:
                         valid = set()
-                    width, height = _dimensions(info, self.width)
+                    width, height = _dimensions(info.width_points, info.height_points, self.width)
                     for slide in info.slides:
                         check_cancel(cancel)
                         target = staging / f"slide_{slide.slide_index}.png"

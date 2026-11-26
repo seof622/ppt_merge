@@ -8,6 +8,7 @@ import logging
 import os
 from pathlib import Path
 import posixpath
+import stat
 from typing import Any
 from urllib.parse import unquote, urlsplit
 from zipfile import BadZipFile, ZipFile
@@ -45,13 +46,22 @@ def revision(identity: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def validate_source(path: Path, cancel: CancelCallback | None = None) -> None:
-    """Office 복구·암호 창이 뜨기 전에 패키지 CRC·XML·내부 참조를 확인한다."""
+def check_source_file(path: Path, cancel: CancelCallback | None = None) -> os.stat_result:
     check_cancel(cancel)
     if path.suffix.lower() not in (".pptx", ".pptm"):
         raise PresentationOpenError("PPTX 또는 PPTM 파일을 선택하세요.")
-    if not path.is_file():
+    try:
+        info = path.stat()
+    except (FileNotFoundError, NotADirectoryError) as error:
+        raise PresentationOpenError(f"PowerPoint 파일을 찾을 수 없습니다: {path}") from error
+    if not stat.S_ISREG(info.st_mode):
         raise PresentationOpenError(f"PowerPoint 파일을 찾을 수 없습니다: {path}")
+    return info
+
+
+def validate_source(path: Path, cancel: CancelCallback | None = None) -> None:
+    """Office 복구·암호 창이 뜨기 전에 패키지 CRC·XML·내부 참조를 확인한다."""
+    check_source_file(path, cancel)
     try:
         with path.open("rb") as stream:
             if stream.read(8) == bytes.fromhex("D0CF11E0A1B11AE1"):

@@ -1,12 +1,14 @@
 """기본 캐시를 먼저 보여 주고 선택한 한 장의 고해상도 이미지를 준비한다."""
 
-from PySide6.QtCore import Qt, QThread, QTimer, Slot
+from PySide6.QtCore import Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 from src.workers.ppt_worker import PreviewWorker
 
 
 class SlidePreview(QDialog):
+    released = Signal()
+
     def __init__(self, slides, row, parent=None, service_factory=None):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
@@ -56,6 +58,13 @@ class SlidePreview(QDialog):
     def is_loading(self):
         return self._thread is not None
 
+    @Slot()
+    def _resume_preview(self):
+        window = self.parentWidget()
+        if not self._closing and not window.is_busy and not window._closing:
+            self._factory = window._preview_factory
+            self._request_preview()
+
     def _request_preview(self):
         if self._closing or not self._factory:
             return
@@ -104,7 +113,8 @@ class SlidePreview(QDialog):
         if thread is not None:
             thread.deleteLater()
         if self._closing:
-            self.close()
+            self.deleteLater()
+            self.released.emit()
         elif self._pending is not None:
             self._pending = None
             self._request_preview()
@@ -137,24 +147,19 @@ class SlidePreview(QDialog):
         if hasattr(self, 'image'):
             self.refresh()
 
-    def reject(self):
-        # Esc도 작업 중 창 닫기와 같은 정리 순서를 거친다.
-        if self.is_loading:
-            self.close()
-        else:
-            super().reject()
-
-    def closeEvent(self, event):
-        if self.is_loading:
-            self._closing = True
-            self._pending = None
+    def done(self, result):
+        if self._closing:
+            return
+        self._closing = True
+        self._pending = None
+        loading = self.is_loading
+        if loading:
+            # 창은 즉시 닫고 자식 QThread가 정리될 때까지 객체를 유지한다.
+            self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
             self._worker.request_cancel()
-            self.previous.setEnabled(False)
-            self.next.setEnabled(False)
-            self.quality.setText('미리보기 작업을 정리한 뒤 닫습니다…')
-            event.ignore()
-        else:
-            super().closeEvent(event)
+        super().done(result)
+        if not loading:
+            self.released.emit()
 
 
 def open_preview(view):
@@ -168,12 +173,11 @@ def open_preview(view):
                    if not getattr(window, 'is_busy', False) and not getattr(window, '_closing', False) else None)
         dialog = SlidePreview(view.model().slides, index.row(), window, service_factory=factory)
         if hasattr(window, '_preview_dialogs'):
+            for previous in window._preview_dialogs:
+                if previous.is_loading and previous._closing:
+                    previous.released.connect(dialog._resume_preview)
             window._preview_dialogs.add(dialog)
-            def finished(*_):
-                window._preview_dialogs.discard(dialog)
-                window._update_actions()
-                if window._closing:
-                    QTimer.singleShot(0, window.close)
-            dialog.finished.connect(finished)
+            dialog.finished.connect(window._update_actions)
+            dialog.released.connect(lambda: window._preview_released(dialog))
         dialog.open()
         return dialog

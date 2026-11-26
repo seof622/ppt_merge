@@ -8,7 +8,8 @@ from unittest.mock import patch
 from PIL import Image
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QFileDialog
+from PySide6.QtWidgets import QFileDialog, QPushButton
+from shiboken6 import isValid
 from src.ppt.errors import ThumbnailError, check_cancel
 from src.ppt.powerpoint_service import GenerationResult
 from src.ui.slide_preview import open_preview
@@ -120,10 +121,60 @@ class UiRefinementTests(unittest.TestCase):
         fixture.wait_until(started.is_set)
         self.assertTrue(self.window.is_busy)
         self.window.close()
+        self.assertFalse(dialog.isVisible())
         fixture.wait_until(lambda: not self.window.isVisible())
         self.assertTrue(cleaned.is_set())
-        self.assertFalse(dialog.is_loading)
         self.assertFalse(self.window._preview_dialogs)
+
+    def test_closing_output_preview_releases_modal_window_before_worker_cleanup(self):
+        self.load(self.a)
+        panel = self.window.output_panel
+        panel.add_slides(self.window.slide_grid.model.slides)
+        panel.select_rows([0])
+        for action in ('button', 'escape'):
+            with self.subTest(action=action):
+                started = threading.Event()
+                finish_cleanup = threading.Event()
+                image = self.root / 'reopened-preview.png'
+                Image.new('RGB', (1600, 900), '#b0c080').save(image)
+
+                class Service:
+                    def load_preview(self, slide, cancel=None):
+                        if slide.slide_index == 1:
+                            started.set()
+                            finish_cleanup.wait(5)
+                            check_cancel(cancel)
+                        return str(image)
+
+                self.window._preview_factory = Service
+                dialog = open_preview(panel.view)
+                try:
+                    fixture.wait_until(started.is_set)
+                    if action == 'button':
+                        close = next(button for button in dialog.findChildren(QPushButton)
+                                     if button.text() == '닫기 · Esc')
+                        close.click()
+                    else:
+                        QTest.keyClick(dialog, Qt.Key.Key_Escape)
+                    self.assertFalse(dialog.isVisible())
+                    self.assertIsNone(self.app.activeModalWidget())
+                    self.assertTrue(self.window.isVisible())
+                    self.assertTrue(self.window.is_busy)
+                    self.assertFalse(self.window.generate_button.isEnabled())
+                    self.assertTrue(isValid(dialog))
+
+                    panel.select_rows([1])
+                    reopened = open_preview(panel.view)
+                    self.assertTrue(reopened.isVisible())
+                    self.assertEqual(reopened.quality.text(), '기본 미리보기')
+                finally:
+                    finish_cleanup.set()
+
+                fixture.wait_until(lambda: reopened.quality.text() == '고해상도 미리보기')
+                fixture.wait_until(lambda: not self.window.is_busy and not isValid(dialog))
+                reopened.close()
+                self.assertTrue(self.window.generate_button.isEnabled())
+                panel.select_rows([0])
 
     def test_navigation_cancels_old_preview_and_only_displays_current_slide(self):
         started = threading.Event()

@@ -13,7 +13,8 @@ from typing import Any
 from src.models.presentation_model import PresentationInfo
 from src.models.slide_model import SlideItem
 from src.ppt.errors import (CancelCallback, PowerPointBusyError, PowerPointError,
-                            PresentationOpenError, ThumbnailError, GenerationError, check_cancel)
+                            PresentationOpenError, SourceChangedError, ThumbnailError,
+                            GenerationError, check_cancel)
 from src.utils.process_utils import process_pids
 from src.ppt.internal_links import InternalLinkError, read_internal_links, reconnect_internal_links
 
@@ -129,6 +130,24 @@ class PresentationManager:
             raise PresentationOpenError("슬라이드 정보를 읽지 못했습니다. 로그를 확인하세요.") from error
         finally:
             presentation = slide = shape = None
+
+    def read_slide_size(self, path: Path, index: int, slide_id: int) -> tuple[float, float]:
+        """선택한 슬라이드의 ID와 파일의 슬라이드 크기를 확인한다."""
+        presentation = slides = page_setup = None
+        try:
+            presentation = self._open(path)
+            slides = presentation.Slides
+            if not 1 <= index <= int(slides.Count) or int(slides.Item(index).SlideID) != slide_id:
+                raise SourceChangedError("원본 슬라이드가 변경되었습니다. PPT를 다시 읽어 주세요.")
+            page_setup = presentation.PageSetup
+            return float(page_setup.SlideWidth), float(page_setup.SlideHeight)
+        except PowerPointError:
+            raise
+        except Exception as error:
+            LOGGER.exception("확대 미리보기 슬라이드 정보 읽기 실패 %s #%s", path, index)
+            raise PresentationOpenError("슬라이드 정보를 읽지 못했습니다. 로그를 확인하세요.") from error
+        finally:
+            presentation = slides = page_setup = None
 
     def export_slide(self, path: Path, index: int, target: Path, width: int, height: int) -> None:
         presentation = slide = None

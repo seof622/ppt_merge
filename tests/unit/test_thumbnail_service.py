@@ -21,6 +21,8 @@ from tests.unit.test_generation_service import write_deck
 class Recorder:
     started: int = 0
     closed: int = 0
+    presentation_reads: int = 0
+    slide_size_reads: list[tuple[int, int]] = field(default_factory=list)
     exported: list[int] = field(default_factory=list)
     fail_at: int | None = None
     size: tuple[float, float] = (960, 540)
@@ -37,9 +39,14 @@ class Recorder:
                 recorder.closed += 1
 
             def read_presentation(self, path, cancel=None):
+                recorder.presentation_reads += 1
                 slides = tuple(SlideItem(str(path), path.name, i, 255 + i, title=f"제목 {i}")
                                for i in range(1, 4))
                 return PresentationInfo(str(path), path.name, *recorder.size, slides)
+
+            def read_slide_size(self, path, index, slide_id):
+                recorder.slide_size_reads.append((index, slide_id))
+                return recorder.size
 
             def export_slide(self, path, index, target, width, height):
                 if recorder.fail_at == index:

@@ -424,6 +424,15 @@ class MainWindow(QMainWindow):
     def is_busy(self) -> bool:
         return self.is_loading or self.is_generating or any(d.is_loading for d in self._preview_dialogs)
 
+    def _preview_released(self, dialog) -> None:
+        self._preview_dialogs.discard(dialog)
+        if self._closing:
+            if not self.is_busy:
+                QTimer.singleShot(0, self.close)
+        else:
+            self._start_pending()
+            self._update_actions()
+
     @Slot(str)
     def _on_output_feedback(self, message: str) -> None:
         if not self.is_busy and not self._closing:
@@ -891,13 +900,13 @@ class MainWindow(QMainWindow):
         event.acceptProposedAction()
 
     def closeEvent(self, event) -> None:
+        self._closing = True
         self._save_timer.stop()
         self._save_workspace()
         self.source_panel.shutdown_search()
         for dialog in tuple(self._preview_dialogs):
             dialog.close()
         if self.is_busy or self.source_panel.has_search:
-            self._closing = True
             self.cancel_loading()
             self._update_actions()
             self.status_text.setText("진행 중인 작업을 정리한 뒤 창을 닫습니다…")
